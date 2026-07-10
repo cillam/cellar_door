@@ -1,0 +1,227 @@
+# ===========================================================================
+# Secrets and env files
+# ===========================================================================
+
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+*.pem
+*.key
+*.cert
+
+# Local-only config
+.secrets/
+secrets/
+credentials/
+
+# ===========================================================================
+# Python (backend/)
+# ===========================================================================
+
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# uv (if used instead of pip)
+.uv/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ===========================================================================
+# Alembic
+# ===========================================================================
+# Do NOT ignore alembic/versions/ — migrations are committed.
+# Only ignore local state:
+
+backend/alembic.ini.local
+
+# ===========================================================================
+# Node / TypeScript (mobile/)
+# ===========================================================================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+pnpm-lock.yaml.backup
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+
+# Testing
+coverage/
+.nyc_output/
+
+# TypeScript
+*.tsbuildinfo
+.tscache/
+
+# ===========================================================================
+# Expo / React Native
+# ===========================================================================
+
+.expo/
+.expo-shared/
+web-build/
+android/
+ios/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
+
+# EAS
+.easignore.local
+
+# Metro
+.metro-health-check*
+
+# ===========================================================================
+# Generated API types
+# ===========================================================================
+# The mobile/lib/api-types.ts is generated from the backend's OpenAPI spec.
+# We DO commit it (so CI can diff against it and catch drift) but the
+# intermediate openapi.json is generated on every run.
+
+openapi.json
+mobile/lib/api-types.generated.ts
+
+# ===========================================================================
+# Eval artifacts
+# ===========================================================================
+# Fixtures and ground truth ARE committed (see .claude/add-eval-case.md).
+# Only ignore local/temp artifacts:
+
+backend/evals/reports/*.local.md
+backend/evals/.cache/
+
+# ===========================================================================
+# Claude Code
+# ===========================================================================
+# The .claude/ directory IS committed (the skills are the harness).
+# Only ignore per-user session state:
+
+.claude/sessions/
+.claude/cache/
+.claude/local/
+
+# ===========================================================================
+# Railway / deploy
+# ===========================================================================
+
+.railway/
+
+# ===========================================================================
+# IDEs and editors
+# ===========================================================================
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ===========================================================================
+# Operating system
+# ===========================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+.Trash-*
+
+# ===========================================================================
+# Logs and temp
+# ===========================================================================
+
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+
+# ===========================================================================
+# Intentionally committed — do NOT add to .gitignore
+# ===========================================================================
+# As a reminder to future-you: these are committed on purpose.
+#
+#   CLAUDE.md, SPEC.md, EXPERIMENTS.md, README.md  ← the harness
+#   .claude/*.md                                    ← skill files
+#   backend/alembic/versions/*.py                   ← migration history
+#   backend/evals/fixtures/*                        ← real eval images + JSON
+#   backend/evals/reports/*.md                      ← committed eval reports
+#   backend/tests/fixtures/*                        ← small synthetic fixtures
+#   .github/workflows/*.yml                         ← CI config
+#   .env.example                                    ← env var template
+#
+# If any of these accidentally get ignored, the harness breaks.

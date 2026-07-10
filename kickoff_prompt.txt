@@ -1,0 +1,142 @@
+Before writing any code, read these files in order:
+1. CLAUDE.md — the context contract; this governs every decision
+2. SPEC.md — the product spec, graph diagram, node contracts, and API contract
+3. EXPERIMENTS.md — the per-node experiment backlog (informs the ModelProvider design)
+4. ROADMAP.md — deferred features; if a request sounds like one of these,
+   confirm scope before building
+5. .claude/add-graph-node.md
+6. backend/app/models/items.py — the Pydantic schemas
+
+Today's goal: ship the backend end-to-end with mocked Claude
+responses, then swap mocks for real Claude calls node-by-node. By end of
+day, `curl`ing the deployed FastAPI on Railway with a real storage path
+should produce two SSE streams (router + await_category, then post-resume
+pipeline through complete) and return a valid WineItem, HalloweenItem, or
+OtherItem payload.
+
+We are explicitly NOT building the mobile app today. That's Sunday.
+
+Work in this order, committing to feature branches and opening PRs after
+each numbered step. CI must be green before merge.
+
+1. Scaffold `backend/` — pyproject.toml with the locked deps (FastAPI,
+   LangGraph, langchain-anthropic, Pydantic v2, asyncpg, alembic, pytest,
+   pytest-asyncio, ruff, mypy, httpx). Minimal `app/main.py` with a health
+   endpoint. Pre-commit hook wired for ruff + mypy. GitHub Actions CI for
+   ruff, mypy --strict, pytest. Set up the Claude Code GitHub Action for
+   automated PR reviews per the "Automated PR review" section in CLAUDE.md
+   (I'll run /install-github-app and configure the review prompt myself
+   after this step completes). No business logic yet.
+
+2. Implement `app/providers/` — the ModelProvider abstraction per
+   CLAUDE.md. Three methods: `complete_text`, `complete_vision`,
+   `complete_structured`. ClaudeProvider is the only implementation for
+   now but the interface must be provider-agnostic. Registry resolves
+   node name → provider → model tier per the Model Tiering table in
+   SPEC.md. Include usage-event emission (model, input tokens, output
+   tokens, latency, estimated cost) as structured log events — the eval
+   harness will consume these later. Write contract tests in
+   `tests/test_providers.py` that pass against a mock provider.
+
+3. Implement `app/graph/state.py` with GraphState (Pydantic model holding
+   image bytes, user_id, suggested_category, confirmed_category,
+   identify_result, ocr_result, title, description, structured_fields,
+   confidence_scores). Then scaffold the six node files under
+   `app/graph/nodes/` — each returns mocked data matching its output
+   schema:
+     - category_router (suggests category with confidence)
+     - identify (vision, visual features + confidence)
+     - ocr (three-state: text_present, text_unreadable, no_text)
+     - generate_description_and_title (text, produces title + description)
+     - extract_structured (skipped for "other"; branches on category)
+     - validate (non-model Pydantic check)
+
+   Prompts go in `app/graph/prompts/` as string constants; placeholders
+   are fine for now. Wire the graph in `app/graph/pipeline.py` with:
+     - An interrupt() after category_router (always pauses for user
+       confirmation — no confidence threshold; the user's confirmation
+       is authoritative per SPEC.md)
+     - Parallel identify + ocr after resume
+     - Conditional routing around extract_structured (skipped for "other")
+     - LangGraph PostgresSaver as the checkpointer (schema TBD in step 5;
+       for now wire with an in-memory checkpointer for tests)
+
+   Write unit tests for each node against the mock provider. Write one
+   end-to-end graph test including the interrupt and resume paths.
+
+4. Implement `app/routers/items.py` — six endpoints per SPEC.md:
+     - POST /items/from-photo: starts graph, streams SSE through
+       await_category, then closes (interrupt reached). Verifies that
+       storage_path starts with photos/<user_id>/ — see SPEC.md Auth.
+     - POST /items/from-photo/{thread_id}/resume: resumes graph via
+       Command(resume=category). Checks graph state user_id matches JWT
+       user_id (403 on mismatch). Handles 410 on expired checkpoints and
+       409 on already-resumed graphs.
+     - POST /items: saves a complete Item payload. Server assigns id and
+       user_id; client-provided values are ignored.
+     - GET /items: user-scoped inventory list.
+     - GET /items/{id}: single item, user-scoped.
+     - PATCH /items/{id}: partial update. Enforces the immutable-field
+       list from SPEC.md (id, user_id, category, photo_url, created_at,
+       confidence_scores → 400 on change attempts).
+     - DELETE /items/{id}: 204 on success, 404 on missing or cross-user.
+       Also deletes the photo from Supabase Storage.
+
+   All endpoints require auth via the JWT dependency (stub for now — just
+   parse the bearer token; real JWKS verification comes in step 5).
+   Integration tests with testcontainers-postgres.
+
+5. Supabase project setup — I'll do this in the Supabase UI and paste the
+   connection string, the JWKS URL, and the Storage bucket config into
+   the env. You wire them into `app/db.py` and `app/auth.py`. Alembic
+   migration for the items table (base columns + JSONB details column
+   per SPEC.md). Run the migration against Supabase. Swap the stubbed
+   JWT verification for real JWKS verification. Swap the in-memory
+   LangGraph checkpointer for PostgresSaver against the same database.
+
+6. Swap mocked Claude responses for real ones, ONE NODE AT A TIME.
+   Order:
+     - category_router (cheapest, fastest feedback)
+     - identify
+     - ocr
+     - generate_description_and_title
+     - extract_structured
+
+   After each swap, run the node's unit test against a fixture image
+   I'll provide, then commit and open a PR. If the node's output quality
+   is bad, iterate on the prompt file in its own commit, re-run the test,
+   commit the prompt change separately. Do NOT touch multiple nodes in
+   one commit. Do NOT touch multiple nodes in one PR.
+
+7. Deploy to Railway. Connect the GitHub repo, set env vars (Anthropic
+   API key, Supabase DATABASE_URL, Supabase JWKS URL, Supabase Storage
+   credentials), generate a public domain. Verify via curl that
+   /items/from-photo with a real storage path returns the first SSE
+   stream (through await_category), then /resume with a confirmed
+   category continues through complete.
+
+Working rules for today:
+
+- Propose the file structure before writing step 1. Wait for my
+  confirmation before running any code.
+- Before each step, state which files you plan to create or modify and
+  why. If a step would touch more than ~6 files, decompose it further
+  before starting.
+- Run the quality gate locally before pushing (ruff check, mypy --strict,
+  pytest for backend). CI is a backstop, not a first-try discovery tool.
+- If you hit a decision point that isn't covered by CLAUDE.md or SPEC.md,
+  stop and ask. Do not guess on architecture.
+- If SPEC.md and CLAUDE.md appear to disagree, per CLAUDE.md: SPEC.md
+  wins for product behavior, CLAUDE.md wins for engineering conventions.
+  Flag any real conflicts in the PR and ask rather than pick.
+- When a test for real Claude output is hard to write deterministically,
+  prefer asserting the SHAPE of the response (fields present, types
+  correct, nulls where expected) over asserting specific values.
+- Update CLAUDE.md's "Things the AI gets wrong here" section in the same
+  PR where you discover and fix a new failure mode — not later. Observed
+  failures go in the observed-failures section; anticipated ones stay
+  in Known gotchas.
+- New failure modes add new fixtures before the fix is merged. See
+  .claude/add-eval-case.md.
+
+Start with step 1's file-structure proposal. Don't write code yet.
