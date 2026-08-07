@@ -2,7 +2,7 @@
 
 A mobile-first home inventory app for wine and collectibles. Take a photo of an item, and an AI pipeline identifies it, reads the label, generates a description, and extracts structured fields into an editable form. Save it, and it's in your inventory.
 
-Built as a three-day project to demonstrate AI-native engineering practice — spec-first workflow, agent harness engineering, per-node model tiering, and a real eval suite over real items.
+Built to demonstrate AI-native engineering practice — spec-first workflow, agent harness engineering, per-node model tiering, and a real eval suite over real items.
 
 ## Status
 
