@@ -1,16 +1,17 @@
 # Skill: Add a graph node
 
-Use this skill when adding a new node to the LangGraph extraction pipeline — for example, a pre-processing node (image quality check), an enrichment node (category-specific metadata lookup), or a new branch of the router.
+You execute this skill when the human asks you to add a new node to the LangGraph extraction pipeline — for example, a pre-processing node (image quality check), an enrichment node (category-specific metadata lookup), or a new branch of the router.
+
+New nodes are architectural additions to the pipeline. Do not propose or add them unprompted.
+
+Before you start, answer in the PR description:
+
+1. What state does this node consume, and what does it add? Nodes are pure functions over `GraphState`. If your node needs information the state doesn't carry, add a field to `GraphState`; don't route data around some other way.
+2. Where does this node go in the graph? Reference the diagram in `SPEC.md`. If it creates a new branch or parallel path, call that out.
+
+The human should have identified the node's known failure mode (every model-calling node has one). If they haven't, ask before proceeding — a node without a documented failure mode is a node whose failure mode you haven't found yet.
 
 If you're adding a node that calls a model, read the `ModelProvider` abstraction in `backend/app/providers/` first. Nodes never import `anthropic` directly.
-
-## Before starting
-
-Answer in the PR description:
-
-1. **What state does this node consume, and what does it add?** Nodes are pure functions over `GraphState`. If your node needs information the state doesn't carry, the fix is usually to add a field to `GraphState`, not to pass data around some other way.
-2. **Where does this node go in the graph?** Draw it on the existing diagram in `SPEC.md`. If it creates a new branch or parallel path, call that out explicitly.
-3. **What's the failure mode?** Every model-calling node has one. A node without a documented failure mode is a node whose failure mode you haven't found yet.
 
 ## File layout
 
@@ -51,7 +52,7 @@ Known failure modes:
 """
 ```
 
-The "return null if uncertain" clause is required for any node with structured output. The "known failure modes" section starts empty and grows as verification finds new ones.
+The "return null if uncertain" clause is required for any node with structured output. The "known failure modes" section starts with the failure mode the human provided and grows as verification finds new ones.
 
 ### 3. Write the node
 
@@ -74,10 +75,10 @@ async def node_name(state: GraphState) -> GraphState:
 
 Rules:
 
-- **Typed input, typed output.** No `dict[str, Any]` return values.
-- **Never mutate `state` in place.** Always return a new state via `model_copy(update=...)`.
-- **Never import `anthropic` or any SDK directly.** Go through `provider_for(node_name)`.
-- **Handle `None` inputs gracefully.** If an upstream node returned null for something this node depends on, decide explicitly: skip (return state unchanged), return an explicit null for this node's output, or raise. Never silently pass through.
+- Typed input, typed output. No `dict[str, Any]` return values.
+- Never mutate `state` in place. Always return a new state via `model_copy(update=...)`.
+- Never import `anthropic` or any SDK directly. Go through `provider_for(node_name)`.
+- Handle `None` inputs gracefully. If an upstream node returned null for something this node depends on, decide explicitly: skip (return state unchanged), return an explicit null for this node's output, or raise. Never silently pass through.
 
 ### 4. Wire into the graph
 
@@ -135,9 +136,9 @@ In `backend/evals/runners/<node_name>.py`, write a runner that:
 
 See `.claude/add-eval-case.md` for the fixture + ground-truth format.
 
-### 9. Update SPEC.md's graph diagram
+### 9. Flag the SPEC.md graph diagram for update
 
-The diagram in `SPEC.md` must reflect the current graph. If it doesn't, future agents (and future you) will build against a stale mental model. Update the ASCII diagram in the same commit.
+The diagram in `SPEC.md` must reflect the current graph. SPEC.md is human-edited, so include an updated ASCII diagram in the PR description or a comment. The human commits the SPEC.md change; do not edit SPEC.md yourself.
 
 ## Verification before merging
 
@@ -146,13 +147,14 @@ The diagram in `SPEC.md` must reflect the current graph. If it doesn't, future a
 - [ ] Unit test passes with a mocked provider
 - [ ] End-to-end graph test passes
 - [ ] Node is registered in `providers/registry.py` with an explicit model tier choice
-- [ ] `SPEC.md` graph diagram is updated
+- [ ] Updated SPEC.md graph diagram is included in the PR for human review
 - [ ] Eval runner exists (if model-calling)
 - [ ] CI green: `ruff`, `mypy --strict`, `pytest`
 
 ## What NOT to do
 
-- **Do not put logic in `pipeline.py`.** Pipeline assembly only — no business logic, no prompts, no model calls.
-- **Do not call the provider directly from `pipeline.py`.** Providers are resolved inside nodes via the registry.
-- **Do not write a node that reads from the DB or makes HTTP calls to external services.** If the node needs external data, that's a different kind of node and should go through an explicit service layer — discuss with the human before building it.
-- **Do not skip the eval runner.** A model-calling node without an eval runner is an untestable liability.
+- Do not put logic in `pipeline.py`. Pipeline assembly only — no business logic, no prompts, no model calls.
+- Do not call the provider directly from `pipeline.py`. Providers are resolved inside nodes via the registry.
+- Do not write a node that reads from the DB or makes HTTP calls to external services. If the node needs external data, stop and ask — that's a different kind of node and needs a service layer, which is an architectural decision.
+- Do not edit SPEC.md. Propose the diagram update in the PR; the human commits it.
+- Do not skip the eval runner. A model-calling node without an eval runner is an untestable liability.
