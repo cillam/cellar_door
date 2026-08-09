@@ -1,0 +1,25 @@
+# Local hooks that shell out to the backend's own uv environment, rather
+# than pre-commit's isolated mirror hooks. Keeps one source of truth for
+# tool versions (backend/pyproject.toml + uv.lock) instead of duplicating
+# pins here. Mobile hooks (eslint, tsc) join this file once mobile/ has code.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (backend)
+        entry: bash -c 'cd backend && uv run ruff check .'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+      - id: ruff-format
+        name: ruff format (backend)
+        entry: bash -c 'cd backend && uv run ruff format --check .'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+      - id: mypy
+        name: mypy --strict (backend)
+        entry: bash -c 'cd backend && uv run mypy --strict app tests'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
