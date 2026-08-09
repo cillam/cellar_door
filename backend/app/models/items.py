@@ -30,11 +30,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 # ---------------------------------------------------------------------------
 # Base
@@ -212,7 +211,7 @@ class OtherItem(BaseItem):
 #   2. Add it to the Union below
 #   3. Update .claude/add-item-category.md if the steps change
 Item = Annotated[
-    Union[WineItem, HalloweenItem, OtherItem],
+    WineItem | HalloweenItem | OtherItem,
     Field(discriminator="category"),
 ]
 
