@@ -1,0 +1,44 @@
+[project]
+name = "cellar-door-backend"
+version = "0.1.0"
+description = "FastAPI + LangGraph backend for the Cellar Door inventory app."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "langgraph>=0.2",
+    "langchain-anthropic>=0.3",
+    "pydantic>=2.9",
+    "asyncpg>=0.30",
+    "alembic>=1.13",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
+# Application, not a library — uv manages the environment without building
+# or installing this project as a package.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
