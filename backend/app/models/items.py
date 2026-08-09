@@ -7,8 +7,8 @@ This module is the single source of truth for item shapes across:
   - API request/response bodies (FastAPI routes)
   - Mobile types (via openapi-typescript generation)
 
-Changing a schema here cascades through DB serialization, Claude 
-structured output, API contracts, mobile types, eval fixtures, and tests. 
+Changing a schema here cascades through DB serialization, Claude
+structured output, API contracts, mobile types, eval fixtures, and tests.
 The agent does not modify these classes without explicit human instruction.
 
 Conventions:
@@ -66,8 +66,7 @@ class BaseItem(BaseModel):
         "on the form.",
     )
     photo_url: str = Field(
-        description="Supabase Storage path (not a full URL). "
-        "Signed URLs are generated on read."
+        description="Supabase Storage path (not a full URL). Signed URLs are generated on read."
     )
     description: str = Field(
         description="AI-generated, user-editable prose description. "
