@@ -46,3 +46,9 @@ class GraphState(BaseModel):
     # Per-field confidence, populated by extract_structured and by
     # validate on failure (blanked fields get 0.0). Keys are field names.
     confidence_scores: dict[str, float] = Field(default_factory=dict)
+
+    # validate's output: one message per Pydantic validation failure, for
+    # user visibility (SPEC.md: "add the validation error to the response
+    # payload for user visibility"). Empty when validation passed or
+    # didn't run.
+    validation_errors: list[str] = Field(default_factory=list)
