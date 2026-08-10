@@ -74,7 +74,7 @@ async def test_extract_structured_forces_condition_null_even_if_model_populates_
     # condition is prompt-discouraged but schema-permitted -- SPEC.md and
     # items.py are explicit it's a user judgment call, never
     # AI-populated. A non-compliant model shouldn't be able to sneak a
-    # value through.
+    # value -- or a confidence score for that value -- through.
     canned = HalloweenExtractionResult(
         fields=HalloweenFields(manufacturer="Funko", condition="mint"),
         confidence_scores={"manufacturer": 0.8, "condition": 0.7},
@@ -90,6 +90,8 @@ async def test_extract_structured_forces_condition_null_even_if_model_populates_
     assert result.structured_fields is not None
     assert result.structured_fields["condition"] is None
     assert result.structured_fields["manufacturer"] == "Funko"  # untouched
+    assert "condition" not in result.confidence_scores
+    assert result.confidence_scores["manufacturer"] == 0.8  # untouched
 
 
 async def test_extract_structured_skipped_for_other(monkeypatch: pytest.MonkeyPatch) -> None:

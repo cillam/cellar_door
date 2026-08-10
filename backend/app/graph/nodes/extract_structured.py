@@ -82,8 +82,17 @@ async def extract_structured(state: GraphState) -> GraphState:
         # can ignore "do not populate condition." SPEC.md and items.py
         # are explicit that condition is a user judgment call, never
         # AI-populated, so force it here rather than trust compliance.
+        # confidence_scores is a separate, unconstrained dict[str, float]
+        # (see app/graph/schemas.py) -- forcing fields.condition to None
+        # doesn't stop a non-compliant model from also emitting a
+        # "condition" entry there, which would leave a confidence score
+        # attached to a field that's guaranteed empty. Strip it too.
         fields = halloween_result.fields.model_copy(update={"condition": None})
-        confidence_scores = halloween_result.confidence_scores
+        confidence_scores = {
+            key: value
+            for key, value in halloween_result.confidence_scores.items()
+            if key != "condition"
+        }
 
     return state.model_copy(
         update={
