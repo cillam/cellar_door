@@ -17,6 +17,13 @@ from app.providers import registry
 
 
 def _identify_summary(state: GraphState) -> str:
+    # identify_result is Optional on GraphState, and the graph guarantees
+    # identify always runs before this node -- so None shouldn't happen
+    # in practice. Handled explicitly anyway per CLAUDE.md's node-authoring
+    # rule ("decide explicitly: skip, return an explicit null, or raise --
+    # never silently pass through"): a plain placeholder sentence, so the
+    # model gets a well-formed prompt instead of a KeyError or an empty
+    # gap it might try to fill in on its own.
     if state.identify_result is None:
         return "No identification available."
     return (
@@ -26,6 +33,9 @@ def _identify_summary(state: GraphState) -> str:
 
 
 def _ocr_summary(state: GraphState) -> str:
+    # Same reasoning as _identify_summary above -- ocr_result is Optional
+    # on GraphState even though the graph guarantees ocr always runs
+    # first; handled explicitly rather than assumed away.
     if state.ocr_result is None:
         return "No OCR result available."
     if state.ocr_result.state == "text_present":
