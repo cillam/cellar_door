@@ -61,10 +61,10 @@ Template:
 ```python
 from app.graph.state import GraphState
 from app.graph.prompts.node_name import NODE_NAME_PROMPT
-from app.providers.registry import provider_for
+from app.providers import registry
 
 async def node_name(state: GraphState) -> GraphState:
-    provider = provider_for("node_name")  # resolves via registry
+    provider = registry.provider_for("node_name")  # resolves via registry
     result = await provider.complete_structured(
         prompt=NODE_NAME_PROMPT,
         image=state.image,         # if vision
@@ -72,6 +72,13 @@ async def node_name(state: GraphState) -> GraphState:
     )
     return state.model_copy(update={"new_node_output": result})
 ```
+
+Import the `registry` module itself, not `provider_for` directly. Tests
+mock this call by monkeypatching `registry.provider_for` — that only
+reaches call sites that look it up through the module each time. A
+`from app.providers.registry import provider_for` binds a local name at
+import time that a later `monkeypatch.setattr` on the registry module
+won't reach.
 
 Rules:
 
@@ -112,15 +119,24 @@ Choose the cheapest tier that meets the accuracy bar. Default to Haiku unless yo
 In `backend/tests/test_nodes/test_<node_name>.py`:
 
 ```python
-async def test_node_name_happy_path():
-    state = GraphState(image=load_fixture("wine_beringer_2019.jpg"))
-    provider_mock = make_mock_provider(returns=...)
-    result = await node_name(state, provider=provider_mock)
+async def test_node_name_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider_mock = make_mock_provider(node_name="node_name", returns=...)
+    monkeypatch.setattr(registry, "provider_for", lambda node_name: provider_mock)
+
+    state = GraphState(image=load_fixture("wine_beringer_2019.jpg"), user_id=uuid4())
+    result = await node_name(state)
+
     assert result.new_node_output.field == expected_value
     assert provider_mock.called_with_prompt_containing("...")
 ```
 
-The test mocks the provider (so CI doesn't spend Claude budget) and asserts both the output shape and that the prompt was called with the right content.
+The node signature never takes a provider parameter — it always resolves
+one internally via `registry.provider_for(node_name)` (see step 3 above).
+Tests mock the provider by monkeypatching `app.providers.registry`'s
+`provider_for`, which every node's internal call goes through, rather
+than injecting a provider directly. This mocks the provider (so CI
+doesn't spend Claude budget) and lets the test assert both the output
+shape and that the prompt was called with the right content.
 
 ### 7. Add at least one end-to-end fixture
 
