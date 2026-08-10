@@ -68,6 +68,30 @@ async def test_extract_structured_halloween(monkeypatch: pytest.MonkeyPatch) -> 
     assert call.image == state.image
 
 
+async def test_extract_structured_forces_condition_null_even_if_model_populates_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # condition is prompt-discouraged but schema-permitted -- SPEC.md and
+    # items.py are explicit it's a user judgment call, never
+    # AI-populated. A non-compliant model shouldn't be able to sneak a
+    # value through.
+    canned = HalloweenExtractionResult(
+        fields=HalloweenFields(manufacturer="Funko", condition="mint"),
+        confidence_scores={"manufacturer": 0.8, "condition": 0.7},
+    )
+    mock = make_mock_provider(node_name="extract_structured", returns=canned)
+    monkeypatch.setattr(registry, "provider_for", lambda node_name: mock)
+
+    state = GraphState(
+        image=load_fixture("placeholder.png"), user_id=uuid4(), confirmed_category="halloween"
+    )
+    result = await extract_structured(state)
+
+    assert result.structured_fields is not None
+    assert result.structured_fields["condition"] is None
+    assert result.structured_fields["manufacturer"] == "Funko"  # untouched
+
+
 async def test_extract_structured_skipped_for_other(monkeypatch: pytest.MonkeyPatch) -> None:
     mock = make_mock_provider(node_name="extract_structured", returns=None)
     monkeypatch.setattr(registry, "provider_for", lambda node_name: mock)

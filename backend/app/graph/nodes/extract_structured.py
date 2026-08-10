@@ -77,7 +77,12 @@ async def extract_structured(state: GraphState) -> GraphState:
             image=state.image,
             schema=HalloweenExtractionResult,
         )
-        fields = halloween_result.fields
+        # condition is schema-permitted but prompt-discouraged only --
+        # HalloweenFields doesn't exclude it structurally, and the model
+        # can ignore "do not populate condition." SPEC.md and items.py
+        # are explicit that condition is a user judgment call, never
+        # AI-populated, so force it here rather than trust compliance.
+        fields = halloween_result.fields.model_copy(update={"condition": None})
         confidence_scores = halloween_result.confidence_scores
 
     return state.model_copy(

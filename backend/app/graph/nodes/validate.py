@@ -59,6 +59,14 @@ def _blank_invalid_fields(
     confidence_updates: dict[str, float] = {}
     for error in exc.errors():
         if not error["loc"]:
+            # Root-level error (e.g. `structured_fields` isn't a mapping
+            # at all) -- nothing to blank at the field level, so this
+            # error is recorded in validation_errors but nothing gets
+            # corrected. Assumes structured_fields is always built from
+            # an already-validated WineFields/HalloweenFields.model_dump()
+            # (true today, in extract_structured.py), so a root-level
+            # error shouldn't occur in practice. Revisit if a future
+            # provider swap (EXPERIMENTS.md) stops guaranteeing that.
             continue
         field_name = str(error["loc"][0])
         blanked[field_name] = None
