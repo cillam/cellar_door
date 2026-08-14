@@ -192,7 +192,15 @@ Streams 2 and 3 depend on the Pydantic models from stream 1. Stream 4 depends on
 
 Observed failure modes found during development or verification. This section is deliberately empty until real failures are discovered — anticipated failure modes live in "Known gotchas" below. Entries here are evidence-based: something the pipeline actually did wrong, with a fix and a regression test.
 
-_(empty — populated during verification passes)_
+### Parallel nodes conflict when they return a full GraphState
+
+**Symptom:** `langgraph.errors.InvalidUpdateError: At key 'image': Can receive only one value per step` when `identify` and `ocr` (which run in parallel per SPEC.md's diagram) are both wired into the compiled graph and invoked together — surfaced immediately on the first end-to-end pipeline test, not in any single node's isolated unit test.
+
+**Why it happens:** Every node's documented contract (this file, `.claude/add-graph-node.md`) has it return a full `GraphState` via `state.model_copy(update={...})`. LangGraph, given a Pydantic state schema, treats every field *present* in a node's return value as a write to that field's channel — including fields whose value didn't change. That's invisible when only one node runs per step (each node file's own unit test only ever exercises it alone), but the moment two nodes run in the same superstep and both "write" an unchanged shared field (e.g. `image`) with identical values, the default `LastValue` channel still rejects the second write in that step, even though the values agree.
+
+**Fix:** Node files and their contract (`(state: GraphState) -> GraphState`, returning a full copy) are unchanged — the fix lives entirely in `app/graph/pipeline.py`, which is pipeline-assembly's job. `_as_partial_update` wraps each node, diffs its returned state against its input, and forwards only the fields that actually changed. A related consequence worth knowing: a `GraphState` field with a plain `= None` default stays *absent* (not `None`-valued) from `ainvoke()`/`aget_state()` output until some node actually writes it; fields with a `default_factory` (`confidence_scores`, `validation_errors`) are seeded from the factory up front and are always present. `GraphState.model_validate(result)` is the safe way to hydrate a fully-defaulted instance from either kind. See `pipeline.py`'s module docstring for the full explanation.
+
+**Regression test:** `backend/tests/test_graph.py` — the wine/halloween/other happy-path tests exercise the parallel identify+ocr branch directly (this bug fails the *first* one immediately); `test_graph_none_default_fields_stay_absent_until_written` pins down the absent-vs-seeded-default distinction.
 
 ### Template for new entries
 
