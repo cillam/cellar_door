@@ -1,13 +1,44 @@
 """FastAPI entrypoint.
 
-No business logic here — routers, providers, and the graph get wired in
-later steps. This file's only job right now is to prove the app boots
-and to expose a health endpoint for deploy checks (Railway) and CI.
+Routers get registered here as they land (app/routers/, from step 4).
+This file's job right now: boot the app, behave differently in
+production where that's security-relevant (docs endpoints), and expose
+a health endpoint for deploy checks (Railway) and CI. The DB pool isn't
+wired into the app lifespan yet -- app/db.py and the items-table
+migration exist and are tested (tests/test_db.py, testcontainers), but
+nothing routes to them until a step that actually needs a live pool
+(app/routers/items.py's GET/POST endpoints). Wiring it here before that
+would make `uvicorn app.main:app` require a running Postgres just to
+serve /health, which it doesn't need today.
 """
 
 from fastapi import FastAPI
 
-app = FastAPI(title="Cellar Door API")
+from app.config import Environment, get_settings
+
+
+def docs_urls(environment: Environment) -> tuple[str | None, str | None, str | None]:
+    """(docs_url, redoc_url, openapi_url) for FastAPI(), by environment.
+
+    A named function rather than inline conditionals so it's testable
+    directly (tests/test_routes.py) without reloading app.main under a
+    monkeypatched environment. Docs endpoints expose the full
+    route/schema surface -- off in production, on everywhere else
+    (local dev, CI, tests).
+    """
+    if environment == "production":
+        return None, None, None
+    return "/docs", "/redoc", "/openapi.json"
+
+
+_docs_url, _redoc_url, _openapi_url = docs_urls(get_settings().environment)
+
+app = FastAPI(
+    title="Cellar Door API",
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
+)
 
 
 @app.get("/health")
