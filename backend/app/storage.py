@@ -32,6 +32,12 @@ class StorageClient(ABC):
     async def download(self, path: str) -> bytes:
         """Fetch a stored object's bytes -- e.g. a photo for the graph
         pipeline (POST /items/from-photo loads the image this way).
+
+        Raises `FileNotFoundError` if `path` doesn't exist -- both
+        implementations (MockStorageClient in tests/conftest.py,
+        SupabaseStorageClient below) must satisfy this so route code
+        written and tested against the mock (`except FileNotFoundError`)
+        also handles the real thing.
         """
         raise NotImplementedError
 
@@ -81,6 +87,8 @@ class SupabaseStorageClient(StorageClient):
 
     async def download(self, path: str) -> bytes:
         response = await self._client.get(f"/storage/v1/object/{self._bucket}/{path}")
+        if response.status_code == 404:
+            raise FileNotFoundError(path)
         response.raise_for_status()
         return response.content
 
@@ -102,4 +110,7 @@ class SupabaseStorageClient(StorageClient):
         )
         response.raise_for_status()
         signed_path = response.json()["signedURL"]
-        return f"{self._client.base_url}storage/v1{signed_path}"
+        # base_url.join() resolves an absolute-path reference correctly
+        # regardless of whether base_url itself has a trailing slash --
+        # unlike raw string concatenation (see PR #17 review).
+        return str(self._client.base_url.join(f"/storage/v1{signed_path}"))
