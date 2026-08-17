@@ -9,6 +9,7 @@ dependencies = [
     "langgraph>=0.2",
     "langchain-anthropic>=0.3",
     "pydantic>=2.9",
+    "pydantic-settings>=2.5",
     "asyncpg>=0.30",
     "alembic>=1.13",
     "httpx>=0.27",
@@ -20,6 +21,12 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
     "mypy>=1.13",
+    # Sync driver used only by alembic/env.py to run migrations.
+    # Runtime queries always go through asyncpg (app/db.py).
+    "psycopg[binary]>=3.2",
+    # Spins up ephemeral Postgres containers for integration tests.
+    # Requires Docker running locally.
+    "testcontainers[postgres]>=4.8",
 ]
 
 # Application, not a library — uv manages the environment without building
@@ -38,6 +45,13 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+# asyncpg ships no type stubs / py.typed marker. Scoped to just this
+# package rather than a blanket ignore_missing_imports, so a real
+# untyped-import gap elsewhere still gets caught.
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
