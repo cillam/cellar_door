@@ -6,7 +6,6 @@ backend/evals/ (once it exists), per CLAUDE.md.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -27,23 +26,7 @@ from app.graph.schemas import (
 )
 from app.graph.state import GraphState
 from app.providers import registry
-from tests.conftest import load_fixture, make_mock_provider
-
-
-def _provider_resolver(
-    returns_by_node: dict[str, Any],
-) -> Callable[[str], Any]:
-    """Build a registry.provider_for replacement keyed by node name.
-
-    A single monkeypatch target that dispatches to a different canned
-    response per node -- the graph calls provider_for once per
-    model-calling node it visits, so one resolver covers the whole run.
-    """
-
-    def _resolve(node_name: str) -> Any:
-        return make_mock_provider(node_name=node_name, returns=returns_by_node[node_name])
-
-    return _resolve
+from tests.conftest import load_fixture, make_mock_provider, provider_resolver_for
 
 
 def _thread_config() -> RunnableConfig:
@@ -70,7 +53,7 @@ async def test_graph_wine_happy_path_through_interrupt_and_resume(
             confidence_scores={"producer": 0.9, "varietal": 0.85, "vintage": 0.95},
         ),
     }
-    monkeypatch.setattr(registry, "provider_for", _provider_resolver(returns_by_node))
+    monkeypatch.setattr(registry, "provider_for", provider_resolver_for(returns_by_node))
 
     config = _thread_config()
     initial_state = GraphState(image=load_fixture("placeholder.png"), user_id=uuid4())
@@ -124,7 +107,7 @@ async def test_graph_halloween_happy_path(monkeypatch: pytest.MonkeyPatch) -> No
             confidence_scores={"manufacturer": 0.8, "character_or_series": 0.75},
         ),
     }
-    monkeypatch.setattr(registry, "provider_for", _provider_resolver(returns_by_node))
+    monkeypatch.setattr(registry, "provider_for", provider_resolver_for(returns_by_node))
 
     config = _thread_config()
     initial_state = GraphState(image=load_fixture("placeholder.png"), user_id=uuid4())
@@ -196,7 +179,7 @@ async def test_graph_none_default_fields_stay_absent_until_written(
             title="Stapler", description="A standard office stapler."
         ),
     }
-    monkeypatch.setattr(registry, "provider_for", _provider_resolver(returns_by_node))
+    monkeypatch.setattr(registry, "provider_for", provider_resolver_for(returns_by_node))
 
     config = _thread_config()
     initial_state = GraphState(image=load_fixture("placeholder.png"), user_id=uuid4())
@@ -236,7 +219,7 @@ async def test_graph_user_can_override_suggested_category(
             confidence_scores={},
         ),
     }
-    monkeypatch.setattr(registry, "provider_for", _provider_resolver(returns_by_node))
+    monkeypatch.setattr(registry, "provider_for", provider_resolver_for(returns_by_node))
 
     config = _thread_config()
     initial_state = GraphState(image=load_fixture("placeholder.png"), user_id=uuid4())

@@ -22,6 +22,13 @@ class GraphState(BaseModel):
     image: bytes
     user_id: UUID
 
+    # Supabase Storage path the image was loaded from (POST
+    # /items/from-photo's request body). Threaded through so the
+    # `complete` event (app/routers/items.py) can populate
+    # ItemDraft.photo_url without a second source of truth outside the
+    # graph's own checkpointed state.
+    storage_path: str | None = None
+
     # category_router's output, plus the user's confirmation after the
     # await_category interrupt. suggested_category/router_confidence are
     # the router's suggestion; confirmed_category is authoritative once

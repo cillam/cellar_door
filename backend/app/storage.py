@@ -16,8 +16,11 @@ of the Supabase HTTP API shape directly.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from functools import lru_cache
 
 import httpx
+
+from app.config import get_settings
 
 # Placeholder bucket name. Real Supabase project config (SUPABASE_URL,
 # SUPABASE_SERVICE_ROLE_KEY, bucket name) arrives in step 5 -- same
@@ -114,3 +117,19 @@ class SupabaseStorageClient(StorageClient):
         # regardless of whether base_url itself has a trailing slash --
         # unlike raw string concatenation (see PR #17 review).
         return str(self._client.base_url.join(f"/storage/v1{signed_path}"))
+
+
+@lru_cache
+def get_storage_client() -> StorageClient:
+    """FastAPI dependency -- the process-wide StorageClient.
+
+    Routes depend on this (`Depends(get_storage_client)`), never on
+    SupabaseStorageClient directly. Tests override it via FastAPI's
+    `app.dependency_overrides[get_storage_client] = ...` to inject a
+    MockStorageClient instead -- see tests/conftest.py.
+    """
+    settings = get_settings()
+    return SupabaseStorageClient(
+        base_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
+    )

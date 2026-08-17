@@ -45,6 +45,13 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# B008 ("no function calls in argument defaults") doesn't know FastAPI's
+# Depends()/Query()/Header() etc. are meant to be called this way --
+# it's the required, documented FastAPI DI pattern, not a bug. This is
+# ruff's own documented fix for the false positive.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Body"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

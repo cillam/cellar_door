@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Real deployments (Railway, step 7) override this via a real env var.
     database_url: str = "postgresql://postgres:postgres@localhost:5432/cellar_door"
     anthropic_api_key: str | None = None
+    # Placeholders -- real Supabase Storage credentials arrive in step 5,
+    # same spirit as claude.py's placeholder model IDs from step 2.
+    # Defaulted (not required) for the same reason database_url is: app
+    # startup / dependency construction must not hard-fail before step 5.
+    supabase_url: str = "https://REPLACE_WITH_SUPABASE_PROJECT.supabase.co"
+    supabase_service_role_key: str = "REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY"
 
 
 @lru_cache
