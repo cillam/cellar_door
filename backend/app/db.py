@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 import asyncpg
+from fastapi import Request
 
 from app.config import Environment
 
@@ -46,3 +47,16 @@ async def create_pool(database_url: str, *, environment: Environment = "local") 
     """
     ssl = "require" if environment == "production" else None
     return await asyncpg.create_pool(dsn=database_url, ssl=ssl, init=_register_json_codecs)
+
+
+async def get_db_pool(request: Request) -> asyncpg.Pool:
+    """FastAPI dependency -- the process-wide pool, created once at app
+    startup (see app/main.py's lifespan) and stored on app.state.
+
+    Routes depend on this (`Depends(get_db_pool)`) rather than reaching
+    for a module-level pool directly, so tests can override it via
+    `app.dependency_overrides[get_db_pool] = ...` with a
+    testcontainers-backed pool -- same pattern as
+    app.storage.get_storage_client.
+    """
+    return request.app.state.db_pool

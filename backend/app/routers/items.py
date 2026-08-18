@@ -1,8 +1,8 @@
 """Item routes. See SPEC.md's API contract.
 
-This file has two endpoints so far (POST /items/from-photo and its
-resume counterpart) -- the persistence endpoints (POST/GET/PATCH/DELETE
-/items) land in steps 4e/4f.
+Photo-capture flow (POST /items/from-photo + resume) landed in step 4d.
+This step (4e) adds the first persistence endpoints: POST /items,
+GET /items, GET /items/{id}. PATCH/DELETE /items/{id} land in 4f.
 
 SSE payload shapes are hand-mapped per node (`_sse_event_for_update`)
 rather than forwarding the graph's internal partial-update dicts
@@ -18,16 +18,25 @@ below builds exactly what ItemDraft's current schema supports, dropping
 validation_errors rather than either inventing a field on a locked
 schema or silently losing the requirement without saying so. See this
 router's introducing PR for the full note.
+
+Row <-> Item mapping (`_row_to_item`, `_insert_item`): base BaseItem
+columns map directly; category-specific fields live in the `details`
+JSONB column (the migration, step 4a). `_insert_item` computes
+`details` as `item.model_dump(exclude=set(BaseItem.model_fields))` --
+everything the subclass adds beyond BaseItem -- rather than
+hand-listing wine/halloween fields, so a new category (ROADMAP.md)
+needs no change here.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.runnables import RunnableConfig
@@ -35,9 +44,10 @@ from langgraph.types import Command, StateSnapshot
 from pydantic import BaseModel
 
 from app.auth import get_current_user_id
+from app.db import get_db_pool
 from app.graph.pipeline import compiled_graph
 from app.graph.state import GraphState
-from app.models.items import HalloweenItem, ItemDraft, OtherItem, WineItem
+from app.models.items import BaseItem, HalloweenItem, Item, ItemDraft, OtherItem, WineItem
 from app.storage import StorageClient, get_storage_client
 
 router = APIRouter(prefix="/items", tags=["items"])
@@ -271,3 +281,110 @@ async def resume_from_photo(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+_BASE_COLUMNS = (
+    "id",
+    "user_id",
+    "category",
+    "photo_url",
+    "title",
+    "description",
+    "notes",
+    "estimated_value",
+    "confidence_scores",
+    "created_at",
+    "updated_at",
+)
+
+
+def _row_to_item(row: Mapping[str, Any]) -> Item:
+    """Reconstruct an Item from an `items` table row.
+
+    Base columns map directly; `details` (JSONB, category-specific
+    fields) gets spread on top -- WineFields/HalloweenFields' field
+    names match WineItem/HalloweenItem's own field names exactly (see
+    app/graph/schemas.py), so this needs no per-field translation.
+    """
+    base: dict[str, Any] = {column: row[column] for column in _BASE_COLUMNS}
+    details = row["details"] or {}
+    category = row["category"]
+    if category == "wine":
+        return WineItem(**base, **details)
+    if category == "halloween":
+        return HalloweenItem(**base, **details)
+    return OtherItem(**base)
+
+
+async def _insert_item(pool: asyncpg.Pool, item: Item, user_id: UUID) -> asyncpg.Record:
+    """Insert `item`, server-assigning id/user_id -- SPEC.md: "Server
+    assigns id and user_id; client-provided values are ignored."
+    created_at/updated_at come from the table's own defaults (now()),
+    not whatever the client sent.
+    """
+    details = item.model_dump(mode="json", exclude=set(BaseItem.model_fields))
+    row = await pool.fetchrow(
+        """
+        INSERT INTO items (
+            id, user_id, category, photo_url, title, description,
+            notes, estimated_value, confidence_scores, details
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING *
+        """,
+        uuid4(),
+        user_id,
+        item.category,
+        item.photo_url,
+        item.title,
+        item.description,
+        item.notes,
+        item.estimated_value,
+        item.confidence_scores,
+        details,
+    )
+    if row is None:
+        raise RuntimeError("INSERT ... RETURNING * returned no row")
+    return row
+
+
+@router.post("/", response_model=Item, status_code=status.HTTP_201_CREATED)
+async def create_item(
+    item: Item,
+    user_id: UUID = Depends(get_current_user_id),
+    pool: asyncpg.Pool = Depends(get_db_pool),
+) -> Item:
+    row = await _insert_item(pool, item, user_id)
+    return _row_to_item(row)
+
+
+@router.get("/", response_model=list[Item])
+async def list_items(
+    user_id: UUID = Depends(get_current_user_id),
+    pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[Item]:
+    """SPEC.md: "array of the user's items, newest first by created_at"."""
+    rows = await pool.fetch(
+        "SELECT * FROM items WHERE user_id = $1 ORDER BY created_at DESC", user_id
+    )
+    return [_row_to_item(row) for row in rows]
+
+
+@router.get("/{item_id}", response_model=Item)
+async def get_item(
+    item_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    pool: asyncpg.Pool = Depends(get_db_pool),
+) -> Item:
+    row = await pool.fetchrow(
+        "SELECT * FROM items WHERE id = $1 AND user_id = $2", item_id, user_id
+    )
+    if row is None:
+        # Same response whether the item doesn't exist or belongs to
+        # another user -- matches PATCH/DELETE's documented behavior
+        # (SPEC.md), extended here to GET for consistency. Distinct
+        # from the 403 pattern used when a resource identifier is in
+        # the *request body* (POST /items/from-photo's storage_path,
+        # resume's thread_id) -- see this file's module docstring.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    return _row_to_item(row)

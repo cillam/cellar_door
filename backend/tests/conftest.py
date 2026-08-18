@@ -16,22 +16,36 @@ tests/test_graph.py (the graph-level end-to-end tests) and
 tests/test_routes.py (route tests that run the real graph through the
 API layer) -- one node-name-keyed provider mock and one JWT-header
 builder, rather than each test file growing its own copy.
+
+`postgres_url`/`db_pool` are the testcontainers-backed Postgres fixtures
+shared by tests/test_db.py and tests/test_routes.py -- one real,
+migrated container per test session (Docker required) rather than each
+file spinning up its own.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
+import asyncpg
 import jwt
+import pytest
+from alembic.config import Config
+from testcontainers.community.postgres import PostgresContainer
 
+from alembic import command
+from app.config import get_settings
+from app.db import create_pool
 from app.providers.base import ModelProvider
 from app.storage import StorageClient
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 def load_fixture(name: str) -> bytes:
@@ -138,3 +152,47 @@ def bearer_header(user_id: UUID) -> dict[str, str]:
         algorithm="HS256",
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(scope="session")
+def postgres_url() -> Iterator[str]:
+    """A running Postgres container's plain (asyncpg-style) DSN,
+    migrated to head. Session-scoped -- one container, one migration
+    run, shared by every test in the session that needs real
+    persistence (tests/test_db.py, tests/test_routes.py). Requires
+    Docker running locally.
+    """
+    with PostgresContainer("postgres:16-alpine") as pg:
+        url = pg.get_connection_url(driver=None)
+
+        # alembic/env.py reads DATABASE_URL via get_settings(); point it
+        # at the container for the duration of the migration, then
+        # restore whatever was there (nothing, in CI/local dev).
+        original = os.environ.get("DATABASE_URL")
+        os.environ["DATABASE_URL"] = url
+        get_settings.cache_clear()
+        try:
+            alembic_cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
+            command.upgrade(alembic_cfg, "head")
+        finally:
+            if original is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = original
+            get_settings.cache_clear()
+
+        yield url
+
+
+@pytest.fixture
+async def db_pool(postgres_url: str) -> AsyncIterator[asyncpg.Pool]:
+    """A fresh asyncpg pool per test, against the session-shared
+    container above. No truncation between tests -- every test uses a
+    fresh random user_id/item id (uuid4()), so rows from different
+    tests never collide or become visible to each other's queries.
+    """
+    pool = await create_pool(postgres_url, environment="local")
+    try:
+        yield pool
+    finally:
+        await pool.close()
