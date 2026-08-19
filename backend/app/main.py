@@ -13,12 +13,12 @@ the pattern used for get_storage_client/get_current_user_id: a pool
 built by a separate pytest-asyncio fixture lives in a different event
 loop than the one TestClient's request handling runs in, and asyncpg
 connections aren't safe to share across loops. Instead those tests
-point DATABASE_URL at a testcontainers instance and enter
-`with TestClient(app) as client:`, so this real lifespan creates the
-pool inside TestClient's own loop -- see tests/test_routes.py's
-`db_client` fixture. create_pool itself is exercised directly by
-tests/test_db.py, so this file's lifespan is just gluing two
-already-tested pieces together.
+point DATABASE_URL_RUNTIME/DATABASE_URL_MIGRATIONS at a testcontainers
+instance and enter `with TestClient(app) as client:`, so this real
+lifespan creates the pool inside TestClient's own loop -- see
+tests/test_routes.py's `db_client` fixture. create_pool itself is
+exercised directly by tests/test_db.py, so this file's lifespan is
+just gluing two already-tested pieces together.
 """
 
 from collections.abc import AsyncIterator

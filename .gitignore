@@ -211,6 +211,16 @@ temp/
 *.bak
 
 # ===========================================================================
+# Claude Code skills (third-party, not this repo's own .claude/*.md)
+# ===========================================================================
+# .claude/skills/ holds skills installed from external marketplaces (e.g.
+# supabase/agent-skills) via the skills CLI/manager -- Supabase maintains
+# that one, not us. skills-lock.json tracks installed versions. Neither
+# belongs in this repo; re-install locally instead of committing them.
+.claude/skills/
+skills-lock.json
+
+# ===========================================================================
 # Intentionally committed — do NOT add to .gitignore
 # ===========================================================================
 # As a reminder to future-you: these are committed on purpose.
