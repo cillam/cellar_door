@@ -560,6 +560,33 @@ def test_update_item_category_specific_field_succeeds(db_client: TestClient) -> 
     assert response.json()["vintage"] == 2020
 
 
+def test_update_item_category_specific_field_preserves_other_details(
+    db_client: TestClient,
+) -> None:
+    # Regression test for PR #21's review: an earlier revision rewrote
+    # the entire `details` JSONB column from a pre-fetched snapshot on
+    # every PATCH (a lost-update race between concurrent patches to
+    # different fields). The fix merges only the patched keys via
+    # Postgres's || operator -- this pins down that the merge actually
+    # preserves sibling category-specific fields rather than wiping
+    # them back to whatever was read before this specific request.
+    user_id = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
+    assert created["producer"] == "Beringer"
+
+    response = db_client.patch(
+        f"/items/{created['id']}", json={"vintage": 2020}, headers=bearer_header(user_id)
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vintage"] == 2020
+    assert body["producer"] == "Beringer"  # untouched by the patch
+    assert body["varietal"] == "Cabernet Sauvignon"  # untouched by the patch
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

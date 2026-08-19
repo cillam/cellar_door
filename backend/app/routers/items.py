@@ -424,9 +424,20 @@ async def get_item(
     return _row_to_item(row)
 
 
+_MUTABLE_SCALAR_COLUMNS = frozenset({"title", "description", "notes", "estimated_value"})
+
+
 @router.patch("/{item_id}", response_model=Item)
 async def update_item(
     item_id: UUID,
+    # dict[str, Any], not a typed Pydantic model like create_item's `item:
+    # Item` -- deliberate. A typed all-Optional patch model would get
+    # FastAPI's automatic 422 on a bad field type before this function
+    # even runs, which would fight the uniform 400 behavior SPEC.md wants
+    # here (immutable-field attempts and shape errors both -> 400, via
+    # the manual re-validation below). Costs the OpenAPI schema some
+    # precision (patch is just `object` today) -- worth revisiting once
+    # mobile/'s generated client needs real field-level types for this.
     patch: dict[str, Any],
     user_id: UUID = Depends(get_current_user_id),
     pool: asyncpg.Pool = Depends(get_db_pool),
@@ -450,6 +461,10 @@ async def update_item(
     # Merge onto the existing item's full field set, then re-validate
     # against its concrete subclass -- catches bad types/unknown fields
     # in the patch (extra="forbid") the same way construction would.
+    # This merged snapshot is for *validation* only -- the UPDATE below
+    # writes only the fields actually present in `patch`, not this
+    # snapshot's values for fields the patch never touched (see its
+    # docstring for why that distinction matters).
     merged = existing_item.model_dump(mode="json")
     merged.update(patch)
     try:
@@ -457,26 +472,71 @@ async def update_item(
     except ValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    details = updated_item.model_dump(mode="json", exclude=set(BaseItem.model_fields))
-    row = await pool.fetchrow(
-        """
+    row = await _apply_item_patch(pool, item_id, user_id, patch, updated_item)
+    if row is None:
+        # The item existed at _fetch_owned_item_row above but is gone
+        # now -- e.g. deleted by a concurrent request in between. 404,
+        # not a 500: from the client's perspective this is the same
+        # "not found" as if it had never existed.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    return _row_to_item(row)
+
+
+async def _apply_item_patch(
+    pool: asyncpg.Pool,
+    item_id: UUID,
+    user_id: UUID,
+    patch: dict[str, Any],
+    updated_item: Item,
+) -> asyncpg.Record | None:
+    """UPDATE only the columns `patch` actually touched, using
+    `updated_item`'s already-validated values for them.
+
+    Deliberately *not* an unconditional rewrite of every mutable column
+    from a pre-fetched snapshot (update_item's earlier revision did
+    this): two concurrent PATCHes touching different fields on the same
+    item would otherwise race -- whichever UPDATE commits last
+    overwrites the other's change with its own stale read of the field
+    it wasn't even touching. Scalar columns (title/description/notes/
+    estimated_value) get a plain column-level SET; category-specific
+    fields get merged into the `details` JSONB column via Postgres's
+    `||` operator, which is itself atomic and only touches the
+    top-level keys given -- no read of the current `details` needed.
+    """
+    set_clauses = ["updated_at = now()"]
+    params: list[Any] = [item_id, user_id]
+
+    for field in patch:
+        if field in _MUTABLE_SCALAR_COLUMNS:
+            params.append(getattr(updated_item, field))
+            set_clauses.append(f"{field} = ${len(params)}")
+
+    detail_updates = {
+        field: getattr(updated_item, field)
+        for field in patch
+        if field not in _IMMUTABLE_FIELDS and field not in _MUTABLE_SCALAR_COLUMNS
+    }
+    if detail_updates:
+        # Pass the raw dict, not json.dumps(detail_updates) -- the pool's
+        # registered jsonb codec (app/db.py) already encodes outgoing
+        # jsonb parameters. Encoding it here too double-encodes into a
+        # jsonb *string*, and `object || string` in Postgres produces a
+        # jsonb array, not a merged object (caught by
+        # test_update_item_category_specific_field_succeeds).
+        params.append(detail_updates)
+        set_clauses.append(f"details = details || ${len(params)}::jsonb")
+
+    # set_clauses is built from fixed column names in a closed set
+    # (_MUTABLE_SCALAR_COLUMNS, "details", "updated_at"), never from
+    # patch's keys or values directly -- all real values are bound
+    # params ($1, $2, ...), not interpolated into the query string.
+    query = f"""
         UPDATE items
-        SET title = $3, description = $4, notes = $5, estimated_value = $6,
-            details = $7, updated_at = now()
+        SET {", ".join(set_clauses)}
         WHERE id = $1 AND user_id = $2
         RETURNING *
-        """,
-        item_id,
-        user_id,
-        updated_item.title,
-        updated_item.description,
-        updated_item.notes,
-        updated_item.estimated_value,
-        details,
-    )
-    if row is None:
-        raise RuntimeError("UPDATE ... RETURNING * returned no row")
-    return _row_to_item(row)
+    """
+    return await pool.fetchrow(query, *params)
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
