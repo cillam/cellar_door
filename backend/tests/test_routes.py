@@ -7,6 +7,7 @@ convention (one tests/test_routes.py, not one per router).
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,6 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.graph.schemas import (
     CategoryRouterOutput,
     DescriptionOutput,
@@ -338,3 +340,185 @@ async def test_load_snapshot_for_resume_expired_checkpoint_raises_410(
     with pytest.raises(HTTPException) as exc_info:
         await _load_snapshot_for_resume(thread_id, user_id, now=far_future)
     assert exc_info.value.status_code == 410
+
+
+# --- POST /items, GET /items, GET /items/{id} ---------------------------
+
+
+@pytest.fixture
+def db_client(postgres_url: str) -> Iterator[TestClient]:
+    """A TestClient whose app lifespan creates a real DB pool against
+    the testcontainers instance from conftest.py's postgres_url.
+
+    Deliberately *not* `app.dependency_overrides[get_db_pool] = ...`
+    with a pool built by a separate async fixture: asyncpg connections
+    aren't safe to use across event loops, and a pool created by a
+    pytest-asyncio fixture lives in a different loop than the one
+    TestClient's request handling runs in -- that combination produces
+    "cannot perform operation: another operation is in progress" from
+    asyncpg. Routing DATABASE_URL through the real lifespan means the
+    pool is created *inside* TestClient's own loop instead.
+    """
+    original = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = postgres_url
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        if original is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original
+        get_settings.cache_clear()
+
+
+def _wine_payload(user_id: UUID, **overrides: Any) -> dict[str, Any]:
+    """A full WineItem-shaped request body for `user_id`. `id`/`user_id`
+    in the payload itself are deliberately "poisoned" with random
+    values distinct from the real ones, to prove POST /items ignores
+    them (SPEC.md: "Server assigns id and user_id; client-provided
+    values are ignored."). `photo_url` defaults to a path that *does*
+    belong to `user_id` -- create_item's ownership check (PR #20's
+    review) rejects anything else; pass photo_url= explicitly to test
+    that check itself.
+    """
+    payload: dict[str, Any] = {
+        "id": str(uuid4()),
+        "user_id": str(uuid4()),
+        "category": "wine",
+        "photo_url": f"photos/{user_id}/a.jpg",
+        "title": "Beringer Cabernet",
+        "description": "A bottle of wine.",
+        "notes": None,
+        "estimated_value": None,
+        "confidence_scores": {"producer": 0.9},
+        "created_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z",
+        "producer": "Beringer",
+        "varietal": "Cabernet Sauvignon",
+        "vintage": 2019,
+        "region": None,
+        "country": None,
+        "bottle_size": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _other_payload(user_id: UUID, **overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": str(uuid4()),
+        "user_id": str(uuid4()),
+        "category": "other",
+        "photo_url": f"photos/{user_id}/b.jpg",
+        "title": "Stapler",
+        "description": "A standard office stapler.",
+        "notes": None,
+        "estimated_value": None,
+        "confidence_scores": {},
+        "created_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_create_item_ignores_client_provided_id_and_user_id(db_client: TestClient) -> None:
+    user_id = uuid4()
+    payload = _wine_payload(user_id)
+
+    response = db_client.post("/items", json=payload, headers=bearer_header(user_id))
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] != payload["id"]
+    assert body["user_id"] == str(user_id)
+    assert body["user_id"] != payload["user_id"]
+    assert body["category"] == "wine"
+    assert body["producer"] == "Beringer"
+    assert body["vintage"] == 2019
+
+
+def test_create_item_requires_auth() -> None:
+    # Fails at auth before touching the DB -- no db_client needed.
+    client = TestClient(app)
+    response = client.post("/items", json=_wine_payload(uuid4()))
+    assert response.status_code == 401
+
+
+def test_create_item_rejects_mismatched_photo_url(db_client: TestClient) -> None:
+    # Regression test for PR #20's review: photo_url is free text on
+    # the request body, distinct from POST /items/from-photo's
+    # storage_path, but needs the same photos/<user_id>/ ownership
+    # check -- otherwise a client could save another user's photo path
+    # and later have a signed read URL generated for it.
+    user_id = uuid4()
+    other_users_photo = f"photos/{uuid4()}/a.jpg"
+
+    response = db_client.post(
+        "/items",
+        json=_wine_payload(user_id, photo_url=other_users_photo),
+        headers=bearer_header(user_id),
+    )
+
+    assert response.status_code == 403
+
+
+def test_list_items_returns_only_own_items_newest_first(db_client: TestClient) -> None:
+    user_a = uuid4()
+    user_b = uuid4()
+
+    db_client.post(
+        "/items", json=_wine_payload(user_a, title="First"), headers=bearer_header(user_a)
+    )
+    db_client.post(
+        "/items", json=_other_payload(user_a, title="Second"), headers=bearer_header(user_a)
+    )
+    db_client.post(
+        "/items", json=_wine_payload(user_b, title="Not A's"), headers=bearer_header(user_b)
+    )
+
+    response = db_client.get("/items", headers=bearer_header(user_a))
+
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 2
+    assert [item["title"] for item in items] == ["Second", "First"]  # newest first
+    assert all(item["user_id"] == str(user_a) for item in items)
+
+
+def test_list_items_requires_auth() -> None:
+    client = TestClient(app)
+    response = client.get("/items")
+    assert response.status_code == 401
+
+
+def test_get_item_returns_own_item(db_client: TestClient) -> None:
+    user_id = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
+
+    response = db_client.get(f"/items/{created['id']}", headers=bearer_header(user_id))
+
+    assert response.status_code == 200
+    assert response.json()["id"] == created["id"]
+    assert response.json()["producer"] == "Beringer"
+
+
+def test_get_item_404_for_nonexistent(db_client: TestClient) -> None:
+    response = db_client.get(f"/items/{uuid4()}", headers=bearer_header(uuid4()))
+    assert response.status_code == 404
+
+
+def test_get_item_404_for_other_users_item(db_client: TestClient) -> None:
+    owner = uuid4()
+    other_user = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(owner), headers=bearer_header(owner)
+    ).json()
+
+    response = db_client.get(f"/items/{created['id']}", headers=bearer_header(other_user))
+
+    assert response.status_code == 404
