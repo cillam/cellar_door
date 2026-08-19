@@ -38,15 +38,29 @@ async def create_pool(database_url: str, *, environment: Environment = "local") 
     app.config.get_settings() itself, so tests can point it at a
     testcontainers instance without fighting a cached Settings
     singleton. The FastAPI app wires the real value from
-    get_settings().database_url at startup (see app/main.py).
+    get_settings().database_url_runtime at startup (see app/main.py).
 
     SSL is required in production -- Supabase requires it for external
     connections -- and left at asyncpg's default ('prefer': try SSL,
     fall back to plain) locally, where a dev Postgres usually isn't
     configured for it.
+
+    statement_cache_size=0 disables asyncpg's client-side prepared-
+    statement cache, always -- not just in production. Supabase's
+    transaction pooler (Supavisor/pgbouncer in transaction mode, the
+    real target of database_url_runtime) doesn't guarantee a client
+    keeps the same backend connection across statements, so a cached
+    prepared statement can silently reference a connection that's no
+    longer "yours," raising DuplicatePreparedStatementError /
+    InvalidSQLStatementNameError under concurrent load. Harmless
+    against plain Postgres (local dev, testcontainers) -- just forgoes
+    a caching optimization there -- so one unconditional setting is
+    simpler and safer than branching on which pooler is in play.
     """
     ssl = "require" if environment == "production" else None
-    return await asyncpg.create_pool(dsn=database_url, ssl=ssl, init=_register_json_codecs)
+    return await asyncpg.create_pool(
+        dsn=database_url, ssl=ssl, init=_register_json_codecs, statement_cache_size=0
+    )
 
 
 async def get_db_pool(request: Request) -> asyncpg.Pool:
@@ -60,9 +74,9 @@ async def get_db_pool(request: Request) -> asyncpg.Pool:
     event loop than the one FastAPI's TestClient runs requests in, and
     asyncpg connections aren't safe to share across loops (surfaces as
     `InterfaceError: cannot perform operation: another operation is in
-    progress`). Tests instead point DATABASE_URL at a testcontainers
-    instance and let this real lifespan create the pool inside
-    TestClient's own loop -- see tests/test_routes.py's `db_client`
-    fixture.
+    progress`). Tests instead point DATABASE_URL_RUNTIME/
+    DATABASE_URL_MIGRATIONS at a testcontainers instance and let this
+    real lifespan create the pool inside TestClient's own loop -- see
+    tests/test_routes.py's `db_client` fixture.
     """
     return request.app.state.db_pool

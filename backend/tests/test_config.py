@@ -21,10 +21,12 @@ def test_settings_reads_environment_from_env_var(monkeypatch: pytest.MonkeyPatch
     assert settings.environment == "production"
 
 
-def test_settings_database_url_has_a_local_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+def test_settings_database_urls_have_local_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABASE_URL_RUNTIME", raising=False)
+    monkeypatch.delenv("DATABASE_URL_MIGRATIONS", raising=False)
     settings = Settings(_env_file=None)
-    assert settings.database_url.startswith("postgresql://")
+    assert settings.database_url_runtime.startswith("postgresql://")
+    assert settings.database_url_migrations.startswith("postgresql://")
 
 
 def test_get_settings_is_cached() -> None:
