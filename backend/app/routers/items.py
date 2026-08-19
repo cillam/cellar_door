@@ -1,8 +1,8 @@
 """Item routes. See SPEC.md's API contract.
 
 Photo-capture flow (POST /items/from-photo + resume) landed in step 4d.
-This step (4e) adds the first persistence endpoints: POST /items,
-GET /items, GET /items/{id}. PATCH/DELETE /items/{id} land in 4f.
+Step 4e added POST /items, GET /items, GET /items/{id}. This step (4f)
+adds PATCH/DELETE /items/{id}, closing out step 4.
 
 SSE payload shapes are hand-mapped per node (`_sse_event_for_update`)
 rather than forwarding the graph's internal partial-update dicts
@@ -31,6 +31,7 @@ needs no change here.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -41,7 +42,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, StateSnapshot
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.auth import get_current_user_id
 from app.db import get_db_pool
@@ -49,6 +50,8 @@ from app.graph.pipeline import compiled_graph
 from app.graph.state import GraphState
 from app.models.items import BaseItem, HalloweenItem, Item, ItemDraft, OtherItem, WineItem
 from app.storage import StorageClient, get_storage_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -297,6 +300,24 @@ _BASE_COLUMNS = (
     "updated_at",
 )
 
+# category -> the concrete Item subclass. Shared by _row_to_item (DB row
+# -> typed item) and update_item (validating a PATCH's merged result
+# against the right subclass) rather than each hand-rolling the same
+# wine/halloween/other dispatch.
+_ITEM_CLASSES: dict[str, type[WineItem] | type[HalloweenItem] | type[OtherItem]] = {
+    "wine": WineItem,
+    "halloween": HalloweenItem,
+    "other": OtherItem,
+}
+
+# SPEC.md PATCH /items/{id}: these six fields "are immutable after save
+# and cannot be changed via PATCH ... returns 400." Everything else
+# (title, description, notes, estimated_value, category-specific
+# fields) is mutable.
+_IMMUTABLE_FIELDS = frozenset(
+    {"id", "user_id", "category", "photo_url", "created_at", "confidence_scores"}
+)
+
 
 def _row_to_item(row: Mapping[str, Any]) -> Item:
     """Reconstruct an Item from an `items` table row.
@@ -308,12 +329,8 @@ def _row_to_item(row: Mapping[str, Any]) -> Item:
     """
     base: dict[str, Any] = {column: row[column] for column in _BASE_COLUMNS}
     details = row["details"] or {}
-    category = row["category"]
-    if category == "wine":
-        return WineItem(**base, **details)
-    if category == "halloween":
-        return HalloweenItem(**base, **details)
-    return OtherItem(**base)
+    item_class = _ITEM_CLASSES[row["category"]]
+    return item_class(**base, **details)
 
 
 async def _insert_item(pool: asyncpg.Pool, item: Item, user_id: UUID) -> asyncpg.Record:
@@ -379,21 +396,114 @@ async def list_items(
     return [_row_to_item(row) for row in rows]
 
 
+async def _fetch_owned_item_row(pool: asyncpg.Pool, item_id: UUID, user_id: UUID) -> asyncpg.Record:
+    """SELECT a row this user owns, or 404.
+
+    Same response whether the item doesn't exist or belongs to another
+    user -- matches PATCH/DELETE's documented SPEC.md behavior, and
+    GET /items/{id} for consistency. Distinct from the 403 pattern used
+    when a resource identifier is in the *request body* (POST
+    /items/from-photo's storage_path, resume's thread_id) -- see this
+    file's module docstring.
+    """
+    row = await pool.fetchrow(
+        "SELECT * FROM items WHERE id = $1 AND user_id = $2", item_id, user_id
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    return row
+
+
 @router.get("/{item_id}", response_model=Item)
 async def get_item(
     item_id: UUID,
     user_id: UUID = Depends(get_current_user_id),
     pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> Item:
+    row = await _fetch_owned_item_row(pool, item_id, user_id)
+    return _row_to_item(row)
+
+
+@router.patch("/{item_id}", response_model=Item)
+async def update_item(
+    item_id: UUID,
+    patch: dict[str, Any],
+    user_id: UUID = Depends(get_current_user_id),
+    pool: asyncpg.Pool = Depends(get_db_pool),
+) -> Item:
+    """SPEC.md: partial update; id/user_id/category/photo_url/created_at/
+    confidence_scores are immutable (400 on an attempt to change any of
+    them); everything else (title, description, notes, estimated_value,
+    category-specific fields) is mutable. updated_at is refreshed
+    server-side on every successful PATCH.
+    """
+    attempted_immutable = sorted(_IMMUTABLE_FIELDS & patch.keys())
+    if attempted_immutable:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot change immutable field(s): {', '.join(attempted_immutable)}",
+        )
+
+    existing_row = await _fetch_owned_item_row(pool, item_id, user_id)
+    existing_item = _row_to_item(existing_row)
+
+    # Merge onto the existing item's full field set, then re-validate
+    # against its concrete subclass -- catches bad types/unknown fields
+    # in the patch (extra="forbid") the same way construction would.
+    merged = existing_item.model_dump(mode="json")
+    merged.update(patch)
+    try:
+        updated_item = _ITEM_CLASSES[existing_item.category].model_validate(merged)
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    details = updated_item.model_dump(mode="json", exclude=set(BaseItem.model_fields))
     row = await pool.fetchrow(
-        "SELECT * FROM items WHERE id = $1 AND user_id = $2", item_id, user_id
+        """
+        UPDATE items
+        SET title = $3, description = $4, notes = $5, estimated_value = $6,
+            details = $7, updated_at = now()
+        WHERE id = $1 AND user_id = $2
+        RETURNING *
+        """,
+        item_id,
+        user_id,
+        updated_item.title,
+        updated_item.description,
+        updated_item.notes,
+        updated_item.estimated_value,
+        details,
     )
     if row is None:
-        # Same response whether the item doesn't exist or belongs to
-        # another user -- matches PATCH/DELETE's documented behavior
-        # (SPEC.md), extended here to GET for consistency. Distinct
-        # from the 403 pattern used when a resource identifier is in
-        # the *request body* (POST /items/from-photo's storage_path,
-        # resume's thread_id) -- see this file's module docstring.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+        raise RuntimeError("UPDATE ... RETURNING * returned no row")
     return _row_to_item(row)
+
+
+@router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_item(
+    item_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    pool: asyncpg.Pool = Depends(get_db_pool),
+    storage_client: StorageClient = Depends(get_storage_client),
+) -> None:
+    """SPEC.md: 204 on success, 404 on missing/cross-user (same
+    response for both); also deletes the photo from Supabase Storage.
+    """
+    row = await pool.fetchrow(
+        "DELETE FROM items WHERE id = $1 AND user_id = $2 RETURNING photo_url",
+        item_id,
+        user_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+
+    # Best-effort: the item is already gone from the DB (the source of
+    # truth for GET /items), so a storage-side failure shouldn't turn a
+    # successful delete into an error response. Logged, not silently
+    # swallowed, so a real outage is still visible somewhere.
+    try:
+        await storage_client.delete(row["photo_url"])
+    except Exception:
+        logger.warning(
+            "Failed to delete photo %s for item %s", row["photo_url"], item_id, exc_info=True
+        )

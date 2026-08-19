@@ -522,3 +522,157 @@ def test_get_item_404_for_other_users_item(db_client: TestClient) -> None:
     response = db_client.get(f"/items/{created['id']}", headers=bearer_header(other_user))
 
     assert response.status_code == 404
+
+
+# --- PATCH /items/{id}, DELETE /items/{id} -------------------------------
+
+
+def test_update_item_mutable_field_succeeds(db_client: TestClient) -> None:
+    user_id = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
+
+    response = db_client.patch(
+        f"/items/{created['id']}",
+        json={"estimated_value": "45.00"},
+        headers=bearer_header(user_id),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["estimated_value"] == "45.00"
+    assert body["title"] == created["title"]  # untouched
+    assert body["updated_at"] != created["updated_at"]  # refreshed server-side
+
+
+def test_update_item_category_specific_field_succeeds(db_client: TestClient) -> None:
+    user_id = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
+
+    response = db_client.patch(
+        f"/items/{created['id']}", json={"vintage": 2020}, headers=bearer_header(user_id)
+    )
+
+    assert response.status_code == 200
+    assert response.json()["vintage"] == 2020
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("id", str(uuid4())),
+        ("user_id", str(uuid4())),
+        ("category", "other"),
+        ("photo_url", "photos/someone-else/a.jpg"),
+        ("created_at", "2020-01-01T00:00:00Z"),
+        ("confidence_scores", {"producer": 1.0}),
+    ],
+)
+def test_update_item_rejects_immutable_fields(
+    db_client: TestClient, field: str, value: Any
+) -> None:
+    user_id = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
+
+    response = db_client.patch(
+        f"/items/{created['id']}", json={field: value}, headers=bearer_header(user_id)
+    )
+
+    assert response.status_code == 400
+
+
+def test_update_item_404_for_nonexistent(db_client: TestClient) -> None:
+    response = db_client.patch(
+        f"/items/{uuid4()}", json={"title": "New Title"}, headers=bearer_header(uuid4())
+    )
+    assert response.status_code == 404
+
+
+def test_update_item_404_for_other_users_item(db_client: TestClient) -> None:
+    owner = uuid4()
+    other_user = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(owner), headers=bearer_header(owner)
+    ).json()
+
+    response = db_client.patch(
+        f"/items/{created['id']}",
+        json={"title": "New Title"},
+        headers=bearer_header(other_user),
+    )
+
+    assert response.status_code == 404
+
+
+def test_update_item_requires_auth() -> None:
+    client = TestClient(app)
+    response = client.patch(f"/items/{uuid4()}", json={"title": "New Title"})
+    assert response.status_code == 401
+
+
+def test_delete_item_removes_it_and_deletes_photo(
+    db_client: TestClient, storage_override: Any
+) -> None:
+    user_id = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
+
+    response = db_client.delete(f"/items/{created['id']}", headers=bearer_header(user_id))
+
+    assert response.status_code == 204
+    assert storage_override.deleted_paths == [created["photo_url"]]
+
+    listing = db_client.get("/items", headers=bearer_header(user_id))
+    assert listing.json() == []
+
+
+def test_delete_item_succeeds_even_if_storage_delete_fails(
+    db_client: TestClient, storage_override: Any
+) -> None:
+    # Best-effort storage cleanup (see delete_item's docstring): the DB
+    # row is the source of truth for GET /items, so a storage-side
+    # failure must not turn a successful delete into an error response.
+    user_id = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
+
+    async def _raise(path: str) -> None:
+        raise RuntimeError("simulated storage outage")
+
+    storage_override.delete = _raise
+
+    response = db_client.delete(f"/items/{created['id']}", headers=bearer_header(user_id))
+
+    assert response.status_code == 204
+    listing = db_client.get("/items", headers=bearer_header(user_id))
+    assert listing.json() == []
+
+
+def test_delete_item_404_for_nonexistent(db_client: TestClient) -> None:
+    response = db_client.delete(f"/items/{uuid4()}", headers=bearer_header(uuid4()))
+    assert response.status_code == 404
+
+
+def test_delete_item_404_for_other_users_item(db_client: TestClient) -> None:
+    owner = uuid4()
+    other_user = uuid4()
+    created = db_client.post(
+        "/items", json=_wine_payload(owner), headers=bearer_header(owner)
+    ).json()
+
+    response = db_client.delete(f"/items/{created['id']}", headers=bearer_header(other_user))
+
+    assert response.status_code == 404
+
+
+def test_delete_item_requires_auth() -> None:
+    client = TestClient(app)
+    response = client.delete(f"/items/{uuid4()}")
+    assert response.status_code == 401
