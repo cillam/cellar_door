@@ -20,13 +20,17 @@ builder, rather than each test file growing its own copy.
 `postgres_url`/`db_pool` are the testcontainers-backed Postgres fixtures
 shared by tests/test_db.py and tests/test_routes.py -- one real,
 migrated container per test session (Docker required) rather than each
-file spinning up its own.
+file spinning up its own. `database_urls_pointed_at` is the env-var
+dance both that fixture and tests/test_routes.py's `db_client` fixture
+need (point Settings' DATABASE_URL_RUNTIME/DATABASE_URL_MIGRATIONS at a
+testcontainers instance, then restore), factored out to one place.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -46,6 +50,33 @@ from app.storage import StorageClient
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+_DATABASE_URL_ENV_VARS = ("DATABASE_URL_RUNTIME", "DATABASE_URL_MIGRATIONS")
+
+
+@contextmanager
+def database_urls_pointed_at(url: str) -> Iterator[None]:
+    """Temporarily point both DATABASE_URL_RUNTIME and
+    DATABASE_URL_MIGRATIONS at `url` (a testcontainers instance),
+    clearing Settings' cache around the change so get_settings() picks
+    it up, then restore whatever was there before (nothing, in CI/local
+    dev). Real deployments never hit this -- these two vars are
+    genuinely different poolers against real Supabase (see
+    app/config.py); tests just need one Postgres to serve both roles.
+    """
+    originals = {key: os.environ.get(key) for key in _DATABASE_URL_ENV_VARS}
+    for key in _DATABASE_URL_ENV_VARS:
+        os.environ[key] = url
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        for key, original in originals.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+        get_settings.cache_clear()
 
 
 def load_fixture(name: str) -> bytes:
@@ -165,21 +196,9 @@ def postgres_url() -> Iterator[str]:
     with PostgresContainer("postgres:16-alpine") as pg:
         url = pg.get_connection_url(driver=None)
 
-        # alembic/env.py reads DATABASE_URL via get_settings(); point it
-        # at the container for the duration of the migration, then
-        # restore whatever was there (nothing, in CI/local dev).
-        original = os.environ.get("DATABASE_URL")
-        os.environ["DATABASE_URL"] = url
-        get_settings.cache_clear()
-        try:
+        with database_urls_pointed_at(url):
             alembic_cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
             command.upgrade(alembic_cfg, "head")
-        finally:
-            if original is None:
-                os.environ.pop("DATABASE_URL", None)
-            else:
-                os.environ["DATABASE_URL"] = original
-            get_settings.cache_clear()
 
         yield url
 

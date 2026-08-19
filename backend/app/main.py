@@ -34,7 +34,9 @@ from app.routers import items
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    app.state.db_pool = await create_pool(settings.database_url, environment=settings.environment)
+    app.state.db_pool = await create_pool(
+        settings.database_url_runtime, environment=settings.environment
+    )
     try:
         yield
     finally:

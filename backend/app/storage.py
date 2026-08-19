@@ -1,16 +1,20 @@
 """StorageClient -- the interface for Supabase Storage interactions.
 
 Mirrors app/providers/base.py's ModelProvider pattern: an interface now,
-plus a real implementation (SupabaseStorageClient) written now with
-placeholder config -- same shape as ClaudeProvider's placeholder model
-IDs from step 2, filled in with real values once step 5's Supabase
-credentials exist. Routes never talk to Supabase Storage directly, and
-never import httpx for this -- they go through StorageClient.
+plus a real implementation (SupabaseStorageClient). Routes never talk
+to Supabase Storage directly, and never import httpx for this -- they
+go through StorageClient.
 
 Unlike ModelProvider there's no EXPERIMENTS.md backlog of swaps for
 this (Supabase Storage is locked in CLAUDE.md's tech stack); the
 interface exists so routes and tests depend on a small contract instead
 of the Supabase HTTP API shape directly.
+
+Endpoint shapes below (`/storage/v1/object/...`) were last verified
+against Supabase's docs in step 4b's PR review, not re-confirmed here
+(step 5) -- a docs re-check was attempted but the tool was unavailable
+mid-session. The real round-trip test against the live 'photos' bucket
+is the actual verification that they still hold.
 """
 
 from __future__ import annotations
@@ -22,10 +26,8 @@ import httpx
 
 from app.config import get_settings
 
-# Placeholder bucket name. Real Supabase project config (SUPABASE_URL,
-# SUPABASE_SERVICE_ROLE_KEY, bucket name) arrives in step 5 -- same
-# spirit as claude.py's _MODEL_IDS placeholders from step 2.
-_PHOTOS_BUCKET = "REPLACE_WITH_SUPABASE_BUCKET_NAME"
+# Real bucket name (created in the Supabase dashboard, step 5), private.
+_PHOTOS_BUCKET = "photos"
 
 
 class StorageClient(ABC):
@@ -67,25 +69,19 @@ class StorageClient(ABC):
 class SupabaseStorageClient(StorageClient):
     """Real implementation, over the Supabase Storage HTTP API via
     httpx (CLAUDE.md: "No requests, use httpx").
-
-    Not exercised for real until step 5's credentials exist -- endpoint
-    shapes here match Supabase's documented Storage API as of this
-    writing; worth a quick sanity check against current docs once real
-    credentials land, the same way claude.py's placeholder model IDs
-    need confirming in step 6.
     """
 
     def __init__(
         self,
         *,
         base_url: str,
-        service_role_key: str,
+        secret_key: str,
         bucket: str = _PHOTOS_BUCKET,
     ) -> None:
         self._bucket = bucket
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            headers={"Authorization": f"Bearer {service_role_key}"},
+            headers={"Authorization": f"Bearer {secret_key}"},
         )
 
     async def download(self, path: str) -> bytes:
@@ -96,14 +92,13 @@ class SupabaseStorageClient(StorageClient):
         return response.content
 
     async def delete(self, path: str) -> None:
-        # httpx's .delete() shortcut doesn't accept a body; Supabase's
-        # bulk-delete endpoint needs one (a list of paths), so use
-        # .request() directly instead.
-        response = await self._client.request(
-            "DELETE",
-            f"/storage/v1/object/{self._bucket}",
-            json={"prefixes": [path]},
-        )
+        # Single-object delete (DELETE /object/{bucket}/{path}, no body)
+        # rather than the bulk-delete endpoint (DELETE /object/{bucket},
+        # body {"prefixes": [...]}) this used before step 5 -- both are
+        # real, valid endpoints (confirmed against Supabase's storage
+        # API reference), but the single-object form needs no body and
+        # matches download()'s path shape.
+        response = await self._client.delete(f"/storage/v1/object/{self._bucket}/{path}")
         response.raise_for_status()
 
     async def signed_url(self, path: str, *, expires_in_seconds: int = 3600) -> str:
@@ -131,5 +126,5 @@ def get_storage_client() -> StorageClient:
     settings = get_settings()
     return SupabaseStorageClient(
         base_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        secret_key=settings.supabase_secret_key,
     )

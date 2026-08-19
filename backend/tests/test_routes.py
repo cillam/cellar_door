@@ -7,7 +7,6 @@ convention (one tests/test_routes.py, not one per router).
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -16,7 +15,6 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
 from app.graph.schemas import (
     CategoryRouterOutput,
     DescriptionOutput,
@@ -29,7 +27,12 @@ from app.main import app, docs_urls
 from app.providers import registry
 from app.routers.items import CHECKPOINT_TTL_SECONDS, _load_snapshot_for_resume
 from app.storage import get_storage_client
-from tests.conftest import bearer_header, make_mock_storage_client, provider_resolver_for
+from tests.conftest import (
+    bearer_header,
+    database_urls_pointed_at,
+    make_mock_storage_client,
+    provider_resolver_for,
+)
 
 
 def test_health() -> None:
@@ -356,21 +359,12 @@ def db_client(postgres_url: str) -> Iterator[TestClient]:
     pytest-asyncio fixture lives in a different loop than the one
     TestClient's request handling runs in -- that combination produces
     "cannot perform operation: another operation is in progress" from
-    asyncpg. Routing DATABASE_URL through the real lifespan means the
-    pool is created *inside* TestClient's own loop instead.
+    asyncpg. Routing DATABASE_URL_RUNTIME/DATABASE_URL_MIGRATIONS
+    through the real lifespan means the pool is created *inside*
+    TestClient's own loop instead.
     """
-    original = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = postgres_url
-    get_settings.cache_clear()
-    try:
-        with TestClient(app) as client:
-            yield client
-    finally:
-        if original is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = original
-        get_settings.cache_clear()
+    with database_urls_pointed_at(postgres_url), TestClient(app) as client:
+        yield client
 
 
 def _wine_payload(user_id: UUID, **overrides: Any) -> dict[str, Any]:

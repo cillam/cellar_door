@@ -22,7 +22,7 @@ def _client_with_mock_transport(handler: httpx.MockTransport) -> SupabaseStorage
     """
     client = SupabaseStorageClient(
         base_url="https://placeholder.supabase.co",
-        service_role_key="placeholder-key",
+        secret_key="placeholder-key",
     )
     client._client = httpx.AsyncClient(
         base_url="https://placeholder.supabase.co",
@@ -70,7 +70,7 @@ def test_supabase_storage_client_constructs_without_real_credentials() -> None:
     # calls (untested here) only work once step 5's credentials exist.
     client = SupabaseStorageClient(
         base_url="https://placeholder.supabase.co",
-        service_role_key="placeholder-key",
+        secret_key="placeholder-key",
     )
     assert isinstance(client, StorageClient)
 
@@ -108,3 +108,27 @@ async def test_supabase_storage_client_download_translates_404_to_file_not_found
 
     with pytest.raises(FileNotFoundError):
         await client.download("photos/u1/missing.jpg")
+
+
+async def test_supabase_storage_client_delete_hits_single_object_endpoint() -> None:
+    # Verifies the step-5 simplification (single-object DELETE, no body)
+    # sends the request Supabase's storage API reference documents,
+    # rather than the bulk-delete shape used before.
+    seen_requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append(request)
+        return httpx.Response(200, json={})
+
+    client = _client_with_mock_transport(httpx.MockTransport(handler))
+
+    await client.delete("photos/u1/a.jpg")
+
+    # _client_with_mock_transport uses the default bucket ("photos", see
+    # _PHOTOS_BUCKET) -- so the URL has "photos" twice: once as the
+    # bucket segment, once as the path's own prefix convention
+    # (photos/<user_id>/<uuid>.jpg). Distinct, coincidentally same word.
+    assert len(seen_requests) == 1
+    assert seen_requests[0].method == "DELETE"
+    assert seen_requests[0].url.path == "/storage/v1/object/photos/photos/u1/a.jpg"
+    assert seen_requests[0].content == b""

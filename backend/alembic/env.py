@@ -1,12 +1,14 @@
 """Alembic migration environment.
 
-Reads DATABASE_URL via app.config.get_settings() rather than a static
-alembic.ini value -- one connection string, shared with app/db.py's
-runtime pool. Alembic itself runs migrations over a sync driver
-(psycopg) regardless of environment; runtime queries always use asyncpg
-(app/db.py) -- the two never share a connection. `app` is importable
-here because alembic.ini's `prepend_sys_path = .` adds backend/ (where
-alembic.ini lives) to sys.path.
+Reads DATABASE_URL_MIGRATIONS via app.config.get_settings() rather than
+a static alembic.ini value -- Supabase's session pooler (a stable,
+non-multiplexed connection), distinct from app/db.py's runtime pool
+(DATABASE_URL_RUNTIME, the transaction pooler). Alembic itself runs
+migrations over a sync driver (psycopg) regardless of environment;
+runtime queries always use asyncpg (app/db.py) -- the two never share a
+connection. `app` is importable here because alembic.ini's
+`prepend_sys_path = .` adds backend/ (where alembic.ini lives) to
+sys.path.
 """
 
 from logging.config import fileConfig
@@ -25,7 +27,8 @@ target_metadata = None  # no ORM models -- migrations are hand-written SQL
 
 
 def _sync_database_url() -> str:
-    """DATABASE_URL, rewritten for Alembic's sync (psycopg) driver.
+    """DATABASE_URL_MIGRATIONS, rewritten for Alembic's sync (psycopg)
+    driver.
 
     app/db.py's asyncpg pool wants a plain `postgresql://` DSN.
     SQLAlchemy (which Alembic uses under the hood) needs the `+psycopg`
@@ -33,7 +36,7 @@ def _sync_database_url() -> str:
     (not installed). Same connection string, different driver, only
     here.
     """
-    url = get_settings().database_url
+    url = get_settings().database_url_migrations
     if url.startswith("postgresql://"):
         return url.replace("postgresql://", "postgresql+psycopg://", 1)
     return url
