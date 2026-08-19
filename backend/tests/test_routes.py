@@ -373,17 +373,21 @@ def db_client(postgres_url: str) -> Iterator[TestClient]:
         get_settings.cache_clear()
 
 
-def _wine_payload(**overrides: Any) -> dict[str, Any]:
-    """A full WineItem-shaped request body. id/user_id are deliberately
-    "poisoned" with random values distinct from the real ones, to prove
-    POST /items ignores them (SPEC.md: "Server assigns id and user_id;
-    client-provided values are ignored.").
+def _wine_payload(user_id: UUID, **overrides: Any) -> dict[str, Any]:
+    """A full WineItem-shaped request body for `user_id`. `id`/`user_id`
+    in the payload itself are deliberately "poisoned" with random
+    values distinct from the real ones, to prove POST /items ignores
+    them (SPEC.md: "Server assigns id and user_id; client-provided
+    values are ignored."). `photo_url` defaults to a path that *does*
+    belong to `user_id` -- create_item's ownership check (PR #20's
+    review) rejects anything else; pass photo_url= explicitly to test
+    that check itself.
     """
     payload: dict[str, Any] = {
         "id": str(uuid4()),
         "user_id": str(uuid4()),
         "category": "wine",
-        "photo_url": "photos/x/a.jpg",
+        "photo_url": f"photos/{user_id}/a.jpg",
         "title": "Beringer Cabernet",
         "description": "A bottle of wine.",
         "notes": None,
@@ -402,12 +406,12 @@ def _wine_payload(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
-def _other_payload(**overrides: Any) -> dict[str, Any]:
+def _other_payload(user_id: UUID, **overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": str(uuid4()),
         "user_id": str(uuid4()),
         "category": "other",
-        "photo_url": "photos/x/b.jpg",
+        "photo_url": f"photos/{user_id}/b.jpg",
         "title": "Stapler",
         "description": "A standard office stapler.",
         "notes": None,
@@ -422,9 +426,9 @@ def _other_payload(**overrides: Any) -> dict[str, Any]:
 
 def test_create_item_ignores_client_provided_id_and_user_id(db_client: TestClient) -> None:
     user_id = uuid4()
-    payload = _wine_payload()
+    payload = _wine_payload(user_id)
 
-    response = db_client.post("/items/", json=payload, headers=bearer_header(user_id))
+    response = db_client.post("/items", json=payload, headers=bearer_header(user_id))
 
     assert response.status_code == 201
     body = response.json()
@@ -439,19 +443,43 @@ def test_create_item_ignores_client_provided_id_and_user_id(db_client: TestClien
 def test_create_item_requires_auth() -> None:
     # Fails at auth before touching the DB -- no db_client needed.
     client = TestClient(app)
-    response = client.post("/items/", json=_wine_payload())
+    response = client.post("/items", json=_wine_payload(uuid4()))
     assert response.status_code == 401
+
+
+def test_create_item_rejects_mismatched_photo_url(db_client: TestClient) -> None:
+    # Regression test for PR #20's review: photo_url is free text on
+    # the request body, distinct from POST /items/from-photo's
+    # storage_path, but needs the same photos/<user_id>/ ownership
+    # check -- otherwise a client could save another user's photo path
+    # and later have a signed read URL generated for it.
+    user_id = uuid4()
+    other_users_photo = f"photos/{uuid4()}/a.jpg"
+
+    response = db_client.post(
+        "/items",
+        json=_wine_payload(user_id, photo_url=other_users_photo),
+        headers=bearer_header(user_id),
+    )
+
+    assert response.status_code == 403
 
 
 def test_list_items_returns_only_own_items_newest_first(db_client: TestClient) -> None:
     user_a = uuid4()
     user_b = uuid4()
 
-    db_client.post("/items/", json=_wine_payload(title="First"), headers=bearer_header(user_a))
-    db_client.post("/items/", json=_other_payload(title="Second"), headers=bearer_header(user_a))
-    db_client.post("/items/", json=_wine_payload(title="Not A's"), headers=bearer_header(user_b))
+    db_client.post(
+        "/items", json=_wine_payload(user_a, title="First"), headers=bearer_header(user_a)
+    )
+    db_client.post(
+        "/items", json=_other_payload(user_a, title="Second"), headers=bearer_header(user_a)
+    )
+    db_client.post(
+        "/items", json=_wine_payload(user_b, title="Not A's"), headers=bearer_header(user_b)
+    )
 
-    response = db_client.get("/items/", headers=bearer_header(user_a))
+    response = db_client.get("/items", headers=bearer_header(user_a))
 
     assert response.status_code == 200
     items = response.json()
@@ -462,13 +490,15 @@ def test_list_items_returns_only_own_items_newest_first(db_client: TestClient) -
 
 def test_list_items_requires_auth() -> None:
     client = TestClient(app)
-    response = client.get("/items/")
+    response = client.get("/items")
     assert response.status_code == 401
 
 
 def test_get_item_returns_own_item(db_client: TestClient) -> None:
     user_id = uuid4()
-    created = db_client.post("/items/", json=_wine_payload(), headers=bearer_header(user_id)).json()
+    created = db_client.post(
+        "/items", json=_wine_payload(user_id), headers=bearer_header(user_id)
+    ).json()
 
     response = db_client.get(f"/items/{created['id']}", headers=bearer_header(user_id))
 
@@ -485,7 +515,9 @@ def test_get_item_404_for_nonexistent(db_client: TestClient) -> None:
 def test_get_item_404_for_other_users_item(db_client: TestClient) -> None:
     owner = uuid4()
     other_user = uuid4()
-    created = db_client.post("/items/", json=_wine_payload(), headers=bearer_header(owner)).json()
+    created = db_client.post(
+        "/items", json=_wine_payload(owner), headers=bearer_header(owner)
+    ).json()
 
     response = db_client.get(f"/items/{created['id']}", headers=bearer_header(other_user))
 

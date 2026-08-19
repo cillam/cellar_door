@@ -348,17 +348,26 @@ async def _insert_item(pool: asyncpg.Pool, item: Item, user_id: UUID) -> asyncpg
     return row
 
 
-@router.post("/", response_model=Item, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=Item, status_code=status.HTTP_201_CREATED)
 async def create_item(
     item: Item,
     user_id: UUID = Depends(get_current_user_id),
     pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> Item:
+    # Same check as POST /items/from-photo's storage_path -- item.photo_url
+    # is a free-text field on the request body, and without this a
+    # client could save another user's photos/<other-user-id>/... path
+    # and later have a signed *read* URL generated for it.
+    if not item.photo_url.startswith(f"photos/{user_id}/"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="photo_url does not belong to the authenticated user",
+        )
     row = await _insert_item(pool, item, user_id)
     return _row_to_item(row)
 
 
-@router.get("/", response_model=list[Item])
+@router.get("", response_model=list[Item])
 async def list_items(
     user_id: UUID = Depends(get_current_user_id),
     pool: asyncpg.Pool = Depends(get_db_pool),

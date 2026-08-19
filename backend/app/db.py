@@ -54,9 +54,15 @@ async def get_db_pool(request: Request) -> asyncpg.Pool:
     startup (see app/main.py's lifespan) and stored on app.state.
 
     Routes depend on this (`Depends(get_db_pool)`) rather than reaching
-    for a module-level pool directly, so tests can override it via
-    `app.dependency_overrides[get_db_pool] = ...` with a
-    testcontainers-backed pool -- same pattern as
-    app.storage.get_storage_client.
+    for a module-level pool directly. Unlike app.storage.get_storage_client,
+    tests do NOT override this via `app.dependency_overrides` -- a pool
+    built by a separate pytest-asyncio fixture lives in a different
+    event loop than the one FastAPI's TestClient runs requests in, and
+    asyncpg connections aren't safe to share across loops (surfaces as
+    `InterfaceError: cannot perform operation: another operation is in
+    progress`). Tests instead point DATABASE_URL at a testcontainers
+    instance and let this real lifespan create the pool inside
+    TestClient's own loop -- see tests/test_routes.py's `db_client`
+    fixture.
     """
     return request.app.state.db_pool
