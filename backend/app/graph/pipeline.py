@@ -10,11 +10,32 @@ not a node in the same sense as the six scaffolded under
 among them), so it's defined here rather than getting its own file.
 
 Checkpointer: AsyncPostgresSaver, against the same Supabase database as
-app/db.py's runtime pool (database_url_runtime). Unlike that pool,
-there's no module-level `compiled_graph` singleton here --
-AsyncPostgresSaver.from_conn_string() manages its own connection pool
-and needs to be entered/exited as an async context manager, which a
-module-level assignment at import time can't do. `compiled_graph_with_postgres`
+app/db.py's runtime pool -- but a *different* pooler. app/main.py's
+lifespan passes it settings.database_url_migrations (Supabase's
+session pooler, port 5432), not database_url_runtime (the transaction
+pooler, port 6543, used for app/db.py's asyncpg pool). This isn't a
+copy-paste slip: AsyncPostgresSaver.from_conn_string() opens and holds
+a single psycopg connection for the checkpointer's entire lifetime
+(unlike asyncpg's per-request pool), and hardcodes
+`prepare_threshold=0` on that connection -- meaning psycopg prepares
+every statement server-side on its *first* execution, not never. Under
+autocommit (also hardcoded), each checkpoint operation is its own
+implicit transaction; against the transaction pooler, pgbouncer is
+free to hand different transactions different backend connections, so
+a statement prepared on one backend can be executed against another
+that never saw the PREPARE -- "prepared statement does not exist"
+under real traffic. The session pooler pins one backend connection for
+the connection's lifetime instead, which is what a single long-lived
+connection like this one needs (the same reason Alembic's migrations
+use it). This is the AsyncPostgresSaver analogue of app/db.py's
+`statement_cache_size=0` workaround for the *transaction* pooler's own
+prepared-statement incompatibility -- same underlying hazard, opposite
+fix, because the two callers hold their connections differently.
+
+Unlike db_pool, there's no module-level `compiled_graph` singleton
+here -- AsyncPostgresSaver.from_conn_string() needs to be
+entered/exited as an async context manager, which a module-level
+assignment at import time can't do. `compiled_graph_with_postgres`
 below is that context manager; app/main.py's lifespan enters it once at
 startup (alongside db_pool) and stores the result on
 app.state.compiled_graph. Routes get it via `get_compiled_graph`
@@ -193,10 +214,17 @@ async def compiled_graph_with_postgres(
     """Compile the graph with a real AsyncPostgresSaver checkpointer.
 
     An async context manager, not a plain function, because
-    AsyncPostgresSaver.from_conn_string() owns a connection pool that
-    needs an explicit enter/exit -- mirrors app/db.py's
+    AsyncPostgresSaver.from_conn_string() owns a connection that needs
+    an explicit enter/exit -- mirrors app/db.py's
     create_pool()/pool.close() lifecycle. app/main.py's lifespan enters
     this once at startup and keeps it open for the app's lifetime.
+
+    `database_url` should be the *session* pooler connection string
+    (settings.database_url_migrations), not the transaction pooler
+    (settings.database_url_runtime) -- see this module's docstring for
+    why: AsyncPostgresSaver holds one connection for its whole lifetime
+    with prepared statements enabled, which the transaction pooler's
+    per-transaction backend-connection swapping breaks.
 
     setup() creates AsyncPostgresSaver's own checkpoint tables
     (idempotent) -- a separate schema from the items-table migration

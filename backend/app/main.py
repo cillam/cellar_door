@@ -7,21 +7,28 @@ expose a health endpoint for deploy checks (Railway) and CI.
 
 TestClient(app) without a `with` block skips lifespan entirely -- used
 throughout tests/test_routes.py for the routes that don't need a live
-pool or a real compiled graph. The routes that do (POST/GET /items,
-step 4e; POST /items/from-photo + resume, step 5b) don't override
-get_db_pool/get_compiled_graph via app.dependency_overrides either,
-despite that being the pattern used for
-get_storage_client/get_current_user_id: a pool or checkpointer built by
-a separate pytest-asyncio fixture lives in a different event loop than
-the one TestClient's request handling runs in, and asyncpg connections
-aren't safe to share across loops (AsyncPostgresSaver has the same
-hazard, being psycopg-backed). Instead those tests point
-DATABASE_URL_RUNTIME/DATABASE_URL_MIGRATIONS at a testcontainers
+pool. The item-CRUD routes (POST/GET /items, step 4e) don't override
+get_db_pool via app.dependency_overrides, despite that being the
+pattern used for get_storage_client/get_current_user_id: a pool built
+by a separate pytest-asyncio fixture lives in a different event loop
+than the one TestClient's request handling runs in, and asyncpg
+connections aren't safe to share across loops. Instead those tests
+point DATABASE_URL_RUNTIME/DATABASE_URL_MIGRATIONS at a testcontainers
 instance and enter `with TestClient(app) as client:`, so this real
-lifespan creates both the pool and the graph inside TestClient's own
-loop -- see tests/test_routes.py's `db_client` fixture. create_pool and
-compiled_graph_with_postgres are each exercised directly elsewhere
-(tests/test_db.py; the graph, via InMemorySaver, in
+lifespan creates the pool inside TestClient's own loop -- see
+tests/test_routes.py's `db_client` fixture.
+
+The from-photo/resume routes (step 5b) are different: get_compiled_graph
+*is* overridden via app.dependency_overrides for every test in
+tests/test_routes.py (its autouse `graph_override` fixture), because
+InMemorySaver is pure in-process state with no cross-event-loop hazard
+the way an asyncpg pool or AsyncPostgresSaver's psycopg connection has
+-- there's no reason to pay for a real Postgres-backed graph in tests
+that don't need one. Compare app/graph/pipeline.py's docstring, which
+covers this from the pipeline side.
+
+create_pool and compiled_graph_with_postgres are each exercised
+directly elsewhere (tests/test_db.py; the graph, via InMemorySaver, in
 tests/test_graph.py), so this file's lifespan is just gluing
 already-tested pieces together.
 """
@@ -44,7 +51,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.database_url_runtime, environment=settings.environment
     )
     try:
-        async with compiled_graph_with_postgres(settings.database_url_runtime) as graph:
+        # database_url_migrations (session pooler), not database_url_runtime
+        # (transaction pooler) -- see compiled_graph_with_postgres's
+        # docstring for why.
+        async with compiled_graph_with_postgres(settings.database_url_migrations) as graph:
             app.state.compiled_graph = graph
             yield
     finally:
