@@ -17,6 +17,17 @@ tests/test_routes.py (route tests that run the real graph through the
 API layer) -- one node-name-keyed provider mock and one JWT-header
 builder, rather than each test file growing its own copy.
 
+`bearer_header` signs real RS256 tokens against a throwaway test RSA
+keypair (module-level, generated once per test session), matching
+app.auth's real JWKS-based verification (step 5c). The autouse
+`jwks_override` fixture below points every test's `get_jwks_client`
+dependency at that same keypair's public JWK instead of Supabase's real
+endpoint, so route tests exercise real signature verification without
+network access -- see app/auth.py's module docstring for why
+verification is real but the transport is mocked at the PyJWKClient
+level rather than via httpx.MockTransport (PyJWKClient doesn't use
+httpx).
+
 `postgres_url`/`db_pool` are the testcontainers-backed Postgres fixtures
 shared by tests/test_db.py and tests/test_routes.py -- one real,
 migrated container per test session (Docker required) rather than each
@@ -40,11 +51,16 @@ import asyncpg
 import jwt
 import pytest
 from alembic.config import Config
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt import PyJWKClient
+from jwt.algorithms import RSAAlgorithm
 from testcontainers.community.postgres import PostgresContainer
 
 from alembic import command
+from app.auth import get_jwks_client
 from app.config import get_settings
 from app.db import create_pool
+from app.main import app
 from app.providers.base import ModelProvider
 from app.storage import StorageClient
 
@@ -170,19 +186,65 @@ def make_mock_storage_client(*, downloads: dict[str, bytes] | None = None) -> Mo
     return MockStorageClient(downloads=downloads or {})
 
 
-def bearer_header(user_id: UUID) -> dict[str, str]:
-    """An Authorization header carrying an unverified JWT for user_id.
+# Throwaway RSA keypair, generated once per test session -- signs every
+# test token (bearer_header, tests/test_auth.py's own tokens) and backs
+# the fake JWKS response jwks_override serves in place of Supabase's
+# real endpoint. Not a secret in any meaningful sense (never used
+# outside this process), so a module-level constant is fine.
+_TEST_KID = "test-key-1"
+_TEST_PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
-    app.auth.get_current_user_id's stub doesn't check the signature
-    (see its module docstring), so any secret works -- the length just
-    needs to clear pyjwt's minimum-key-length warning threshold.
+
+def _test_jwks_response() -> dict[str, Any]:
+    """The JWKS document PyJWKClient.fetch_data() would normally fetch
+    over the network -- one key, matching _TEST_PRIVATE_KEY, in the
+    shape Supabase's real endpoint returns (kty/n/e plus kid/use/alg).
+    """
+    jwk = RSAAlgorithm.to_jwk(_TEST_PRIVATE_KEY.public_key(), as_dict=True)
+    jwk["kid"] = _TEST_KID
+    jwk["use"] = "sig"
+    jwk["alg"] = "RS256"
+    return {"keys": [jwk]}
+
+
+def bearer_header(user_id: UUID) -> dict[str, str]:
+    """An Authorization header carrying a real, verifiable RS256 JWT
+    for user_id, signed against _TEST_PRIVATE_KEY -- app.auth's real
+    JWKS-based verification (step 5c) checks this signature, so unlike
+    the pre-step-5c stub, an arbitrary secret no longer works. The
+    `aud` claim matches app.auth's hard-coded "authenticated" audience
+    (Supabase's documented default, pending confirmation against a
+    real token).
     """
     token = jwt.encode(
-        {"sub": str(user_id)},
-        "test-secret-that-is-long-enough-to-not-warn",
-        algorithm="HS256",
+        {"sub": str(user_id), "aud": "authenticated"},
+        _TEST_PRIVATE_KEY,
+        algorithm="RS256",
+        headers={"kid": _TEST_KID},
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(autouse=True)
+def jwks_override(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Every test gets app.auth.get_current_user_id's real verification
+    logic, but PyJWKClient's network fetch is short-circuited to serve
+    _test_jwks_response() instead of hitting Supabase -- monkeypatching
+    the instance's fetch_data (not httpx.MockTransport, since
+    PyJWKClient doesn't use httpx; see app/auth.py's module docstring).
+    Autouse because nearly every test in tests/test_routes.py calls
+    bearer_header() to authenticate, directly or via `_start_session` --
+    simpler than requesting this fixture by name everywhere. Mirrors
+    tests/test_routes.py's `storage_override` fixture (cleans up the
+    dependency override afterward so it doesn't leak into other tests).
+    """
+    client = PyJWKClient("https://example.invalid/jwks.json")
+    monkeypatch.setattr(client, "fetch_data", lambda: _test_jwks_response())
+    app.dependency_overrides[get_jwks_client] = lambda: client
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_jwks_client, None)
 
 
 @pytest.fixture(scope="session")
