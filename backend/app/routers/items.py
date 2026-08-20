@@ -41,12 +41,13 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.runnables import RunnableConfig
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
 from pydantic import BaseModel, ValidationError
 
 from app.auth import get_current_user_id
 from app.db import get_db_pool
-from app.graph.pipeline import compiled_graph
+from app.graph.pipeline import get_compiled_graph
 from app.graph.state import GraphState
 from app.models.items import BaseItem, HalloweenItem, Item, ItemDraft, OtherItem, WineItem
 from app.storage import StorageClient, get_storage_client
@@ -157,14 +158,19 @@ def _build_item_draft(state: GraphState) -> ItemDraft:
     )
 
 
-async def _stream_from_photo(image: bytes, user_id: UUID, storage_path: str) -> AsyncIterator[str]:
+async def _stream_from_photo(
+    graph: CompiledStateGraph[GraphState],
+    image: bytes,
+    user_id: UUID,
+    storage_path: str,
+) -> AsyncIterator[str]:
     thread_id = str(uuid4())
     yield _format_sse("session", {"thread_id": thread_id})
 
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     initial_state = GraphState(image=image, user_id=user_id, storage_path=storage_path)
 
-    async for item in compiled_graph.astream(initial_state, config=config, stream_mode="updates"):
+    async for item in graph.astream(initial_state, config=config, stream_mode="updates"):
         if "__interrupt__" in item:
             break
         node_name, update = next(iter(item.items()))
@@ -172,7 +178,7 @@ async def _stream_from_photo(image: bytes, user_id: UUID, storage_path: str) -> 
         if sse_event is not None:
             yield _format_sse(*sse_event)
 
-    snapshot = await compiled_graph.aget_state(config)
+    snapshot = await graph.aget_state(config)
     yield _format_sse(
         "await_category",
         {
@@ -189,6 +195,7 @@ async def from_photo(
     request: FromPhotoRequest,
     user_id: UUID = Depends(get_current_user_id),
     storage_client: StorageClient = Depends(get_storage_client),
+    graph: CompiledStateGraph[GraphState] = Depends(get_compiled_graph),
 ) -> StreamingResponse:
     # SPEC.md Auth: verify the path belongs to this user *before*
     # loading the image or running the pipeline.
@@ -206,14 +213,18 @@ async def from_photo(
         ) from exc
 
     return StreamingResponse(
-        _stream_from_photo(image, user_id, request.storage_path),
+        _stream_from_photo(graph, image, user_id, request.storage_path),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
 
 
 async def _load_snapshot_for_resume(
-    thread_id: str, user_id: UUID, *, now: datetime | None = None
+    graph: CompiledStateGraph[GraphState],
+    thread_id: str,
+    user_id: UUID,
+    *,
+    now: datetime | None = None,
 ) -> StateSnapshot:
     """`now` is a testing seam, not something the HTTP layer ever
     exposes -- the resume endpoint always calls this with the real
@@ -221,7 +232,7 @@ async def _load_snapshot_for_resume(
     without literally waiting an hour ("a time-advancing fixture").
     """
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-    snapshot = await compiled_graph.aget_state(config)
+    snapshot = await graph.aget_state(config)
 
     # Nonexistent thread_id -> empty values -> no user_id key at all.
     # Same response as a real mismatch (SPEC.md Auth: "Mismatches
@@ -252,12 +263,12 @@ async def _load_snapshot_for_resume(
     return snapshot
 
 
-async def _stream_resume(thread_id: str, category: str) -> AsyncIterator[str]:
+async def _stream_resume(
+    graph: CompiledStateGraph[GraphState], thread_id: str, category: str
+) -> AsyncIterator[str]:
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
-    async for item in compiled_graph.astream(
-        Command(resume=category), config=config, stream_mode="updates"
-    ):
+    async for item in graph.astream(Command(resume=category), config=config, stream_mode="updates"):
         if "__interrupt__" in item:
             continue  # unreachable -- the graph has exactly one interrupt
         node_name, update = next(iter(item.items()))
@@ -265,7 +276,7 @@ async def _stream_resume(thread_id: str, category: str) -> AsyncIterator[str]:
         if sse_event is not None:
             yield _format_sse(*sse_event)
 
-    final_snapshot = await compiled_graph.aget_state(config)
+    final_snapshot = await graph.aget_state(config)
     final_state = GraphState.model_validate(final_snapshot.values)
     draft = _build_item_draft(final_state)
     yield _format_sse("complete", draft.model_dump(mode="json"))
@@ -276,11 +287,12 @@ async def resume_from_photo(
     thread_id: str,
     request: ResumeRequest,
     user_id: UUID = Depends(get_current_user_id),
+    graph: CompiledStateGraph[GraphState] = Depends(get_compiled_graph),
 ) -> StreamingResponse:
-    await _load_snapshot_for_resume(thread_id, user_id)
+    await _load_snapshot_for_resume(graph, thread_id, user_id)
 
     return StreamingResponse(
-        _stream_resume(thread_id, request.category),
+        _stream_resume(graph, thread_id, request.category),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
