@@ -14,7 +14,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph.state import CompiledStateGraph
 
+from app.graph.pipeline import build_graph, get_compiled_graph
 from app.graph.schemas import (
     CategoryRouterOutput,
     DescriptionOutput,
@@ -23,6 +26,7 @@ from app.graph.schemas import (
     WineExtractionResult,
     WineFields,
 )
+from app.graph.state import GraphState
 from app.main import app, docs_urls
 from app.providers import registry
 from app.routers.items import CHECKPOINT_TTL_SECONDS, _load_snapshot_for_resume
@@ -33,6 +37,28 @@ from tests.conftest import (
     make_mock_storage_client,
     provider_resolver_for,
 )
+
+
+@pytest.fixture(autouse=True)
+def graph_override() -> Iterator[CompiledStateGraph[GraphState]]:
+    """Every test in this file gets a fresh in-memory-checkpointed graph
+    via dependency override, instead of the real lifespan's
+    Postgres-backed one (which only exists inside `db_client`'s
+    `with TestClient(app) as client:` block -- most tests here use a
+    plain `TestClient(app)` for the from-photo/resume endpoints, which
+    skips lifespan entirely). Mirrors tests/test_graph.py's
+    `compiled_graph` fixture; autouse because nearly every test in this
+    file touches /from-photo or /resume, directly or via
+    `_start_session` -- simpler than threading a fixture parameter
+    through each one. Tests that need the actual graph object (to call
+    a helper function directly, not through HTTP) request it by name.
+    """
+    graph: CompiledStateGraph[GraphState] = build_graph().compile(checkpointer=InMemorySaver())
+    app.dependency_overrides[get_compiled_graph] = lambda: graph
+    try:
+        yield graph
+    finally:
+        app.dependency_overrides.pop(get_compiled_graph, None)
 
 
 def test_health() -> None:
@@ -326,12 +352,16 @@ def test_resume_already_resumed_returns_409(
 
 
 async def test_load_snapshot_for_resume_expired_checkpoint_raises_410(
-    monkeypatch: pytest.MonkeyPatch, storage_override: Any
+    monkeypatch: pytest.MonkeyPatch,
+    storage_override: Any,
+    graph_override: CompiledStateGraph[GraphState],
 ) -> None:
     # The HTTP layer never lets a client control the server's clock, so
     # this exercises the time-dependent 410 path by calling the helper
     # directly with a `now` far enough past the checkpoint's real
     # created_at to be expired -- a "time-advancing fixture" in spirit.
+    # Reuses graph_override's own graph object (not a second one) so it
+    # sees the same checkpoint _start_session created via HTTP.
     user_id = uuid4()
     client = TestClient(app)
     thread_id = _start_session(client, user_id, storage_override, WINE_RETURNS, monkeypatch)
@@ -341,7 +371,7 @@ async def test_load_snapshot_for_resume_expired_checkpoint_raises_410(
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        await _load_snapshot_for_resume(thread_id, user_id, now=far_future)
+        await _load_snapshot_for_resume(graph_override, thread_id, user_id, now=far_future)
     assert exc_info.value.status_code == 410
 
 

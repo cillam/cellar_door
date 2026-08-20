@@ -11,9 +11,11 @@ from uuid import uuid4
 
 import pytest
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
-from app.graph.pipeline import compiled_graph
+from app.graph.pipeline import build_graph
 from app.graph.schemas import (
     CategoryRouterOutput,
     DescriptionOutput,
@@ -33,8 +35,22 @@ def _thread_config() -> RunnableConfig:
     return {"configurable": {"thread_id": str(uuid4())}}
 
 
+@pytest.fixture
+def compiled_graph() -> CompiledStateGraph[GraphState]:
+    """Fresh in-memory-checkpointed graph per test.
+
+    This file exercises the graph directly (no FastAPI/HTTP layer), so
+    it builds its own via build_graph() + InMemorySaver rather than
+    going through app.graph.pipeline.compiled_graph_with_postgres,
+    which needs a real Postgres connection and is wired at the FastAPI
+    app's lifespan instead -- see that module's docstring.
+    """
+    return build_graph().compile(checkpointer=InMemorySaver())
+
+
 async def test_graph_wine_happy_path_through_interrupt_and_resume(
     monkeypatch: pytest.MonkeyPatch,
+    compiled_graph: CompiledStateGraph[GraphState],
 ) -> None:
     returns_by_node: dict[str, Any] = {
         "category_router": CategoryRouterOutput(suggested_category="wine", confidence=0.9),
@@ -93,7 +109,9 @@ async def test_graph_wine_happy_path_through_interrupt_and_resume(
     assert final["validation_errors"] == []
 
 
-async def test_graph_halloween_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_graph_halloween_happy_path(
+    monkeypatch: pytest.MonkeyPatch, compiled_graph: CompiledStateGraph[GraphState]
+) -> None:
     returns_by_node: dict[str, Any] = {
         "category_router": CategoryRouterOutput(suggested_category="halloween", confidence=0.8),
         "identify": IdentifyOutput(best_guess="a Funko Pop Jack Skellington", confidence=0.75),
@@ -122,6 +140,7 @@ async def test_graph_halloween_happy_path(monkeypatch: pytest.MonkeyPatch) -> No
 
 async def test_graph_other_category_skips_extract_structured(
     monkeypatch: pytest.MonkeyPatch,
+    compiled_graph: CompiledStateGraph[GraphState],
 ) -> None:
     returns_by_node: dict[str, Any] = {
         "category_router": CategoryRouterOutput(suggested_category="other", confidence=0.4),
@@ -158,6 +177,7 @@ async def test_graph_other_category_skips_extract_structured(
 
 async def test_graph_none_default_fields_stay_absent_until_written(
     monkeypatch: pytest.MonkeyPatch,
+    compiled_graph: CompiledStateGraph[GraphState],
 ) -> None:
     # Regression coverage for a LangGraph mechanic behind the
     # partial-update fix in pipeline.py: GraphState fields with a plain
@@ -202,6 +222,7 @@ async def test_graph_none_default_fields_stay_absent_until_written(
 
 async def test_graph_user_can_override_suggested_category(
     monkeypatch: pytest.MonkeyPatch,
+    compiled_graph: CompiledStateGraph[GraphState],
 ) -> None:
     # SPEC.md: the router's suggestion "can be accepted or overridden" --
     # the user's confirmed category is authoritative even when it

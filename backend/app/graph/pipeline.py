@@ -9,9 +9,25 @@ not a node in the same sense as the six scaffolded under
 `app/graph/nodes/` (kickoff's node-scaffolding step didn't list it
 among them), so it's defined here rather than getting its own file.
 
-Checkpointer: in-memory for now. PostgresSaver (same schema TBD) is a
-later step, once Supabase is wired up -- swapping it is a one-line
-change to `_checkpointer` below, not a graph restructure.
+Checkpointer: AsyncPostgresSaver, against the same Supabase database as
+app/db.py's runtime pool (database_url_runtime). Unlike that pool,
+there's no module-level `compiled_graph` singleton here --
+AsyncPostgresSaver.from_conn_string() manages its own connection pool
+and needs to be entered/exited as an async context manager, which a
+module-level assignment at import time can't do. `compiled_graph_with_postgres`
+below is that context manager; app/main.py's lifespan enters it once at
+startup (alongside db_pool) and stores the result on
+app.state.compiled_graph. Routes get it via `get_compiled_graph`
+(`Depends(...)`), the same pattern as app/db.py's `get_db_pool` and
+app/storage.py's `get_storage_client` -- never the old direct
+`from app.graph.pipeline import compiled_graph` import.
+
+Tests don't go through any of this: tests/test_graph.py compiles its
+own graph with InMemorySaver directly (build_graph() is still exported
+for that), and tests/test_routes.py overrides get_compiled_graph via
+app.dependency_overrides with the same -- InMemorySaver is pure
+in-process state, not a network connection, so (unlike app/db.py's
+get_db_pool) there's no cross-event-loop hazard to work around here.
 
 Node return values: every node in app/graph/nodes/ returns a full
 GraphState via `state.model_copy(update=...)`, per CLAUDE.md's node
@@ -48,10 +64,12 @@ tests/test_graph.py's test_graph_none_default_fields_stay_absent_until_written.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import Any, Literal, cast
 
-from langgraph.checkpoint.memory import InMemorySaver
+from fastapi import Request
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
@@ -168,5 +186,33 @@ def build_graph() -> StateGraph[GraphState]:
     return graph
 
 
-_checkpointer = InMemorySaver()
-compiled_graph: CompiledStateGraph[GraphState] = build_graph().compile(checkpointer=_checkpointer)
+@asynccontextmanager
+async def compiled_graph_with_postgres(
+    database_url: str,
+) -> AsyncIterator[CompiledStateGraph[GraphState]]:
+    """Compile the graph with a real AsyncPostgresSaver checkpointer.
+
+    An async context manager, not a plain function, because
+    AsyncPostgresSaver.from_conn_string() owns a connection pool that
+    needs an explicit enter/exit -- mirrors app/db.py's
+    create_pool()/pool.close() lifecycle. app/main.py's lifespan enters
+    this once at startup and keeps it open for the app's lifetime.
+
+    setup() creates AsyncPostgresSaver's own checkpoint tables
+    (idempotent) -- a separate schema from the items-table migration
+    (backend/alembic/), managed by LangGraph itself rather than our
+    Alembic history.
+    """
+    async with AsyncPostgresSaver.from_conn_string(database_url) as checkpointer:
+        await checkpointer.setup()
+        yield build_graph().compile(checkpointer=checkpointer)
+
+
+async def get_compiled_graph(request: Request) -> CompiledStateGraph[GraphState]:
+    """FastAPI dependency -- the process-wide compiled graph, created
+    once at app startup (see app/main.py's lifespan) and stored on
+    app.state. Routes depend on this (`Depends(get_compiled_graph)`)
+    rather than importing a module-level graph directly -- see this
+    module's docstring.
+    """
+    return cast(CompiledStateGraph[GraphState], request.app.state.compiled_graph)
