@@ -3,6 +3,12 @@
 Wraps `langchain_anthropic.ChatAnthropic`. Nodes never import this module
 directly; they resolve a provider via `app.providers.registry.provider_for`.
 See CLAUDE.md's `ModelProvider` conventions.
+
+Real model IDs and pricing (step 6) -- tests never make real Claude
+calls (CLAUDE.md: "Claude API calls in CI" are explicitly out of scope;
+tests/test_providers.py mocks `_client`'s methods). Real runs happen
+node-by-node against fixture images the user provides, one node's
+prompt/behavior verified and committed at a time -- see step 6's plan.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
+from app.config import get_settings
 from app.providers.base import ModelProvider
 from app.providers.events import UsageEvent, emit_usage_event
 
@@ -22,21 +29,24 @@ T = TypeVar("T", bound=BaseModel)
 
 ModelTier = Literal["haiku", "sonnet"]
 
-# Placeholder model IDs. Real Anthropic model strings get filled in here
-# before step 6 (swapping mocked responses for real Claude calls) — see
-# SPEC.md's Model Tiering table for the intended tier per node. Centralized
-# here so picking a model is a one-line-per-tier change, not a code change.
+# Real Anthropic model IDs (step 6) -- see SPEC.md's Model Tiering table
+# for the intended tier per node. Centralized here so picking a model is
+# a one-line-per-tier change, not a code change. Current as of the
+# category_router swap (step 6, node 1 of 5); confirmed against
+# platform.claude.com/docs/en/about-claude/pricing at that time.
 _MODEL_IDS: dict[ModelTier, str] = {
-    "haiku": "REPLACE_WITH_HAIKU_MODEL_ID",
-    "sonnet": "REPLACE_WITH_SONNET_MODEL_ID",
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-5",
 }
 
-# Placeholder $/1M-token pricing (input, output). Zeros keep
-# `estimated_cost_usd` well-typed (float, not None) without asserting
-# real numbers we don't have yet. Fill in alongside the model IDs above.
+# $/1M-token pricing (input, output), confirmed against
+# platform.claude.com/docs/en/about-claude/pricing at the same time as
+# the model IDs above -- re-verify both together if either is revisited,
+# since a stale price paired with a current model silently mis-estimates
+# every eval report's cost column.
 _PRICING_PER_MILLION_TOKENS: dict[ModelTier, tuple[float, float]] = {
-    "haiku": (0.0, 0.0),
-    "sonnet": (0.0, 0.0),
+    "haiku": (1.0, 5.0),
+    "sonnet": (2.0, 10.0),
 }
 
 
@@ -47,7 +57,11 @@ class ClaudeProvider(ModelProvider):
         self.node_name = node_name
         self.tier = tier
         self.model = _MODEL_IDS[tier]
-        self._client = ChatAnthropic(model=self.model)
+        # Explicit api_key -- without it, ChatAnthropic falls back to the
+        # raw ANTHROPIC_API_KEY OS env var, not Settings.anthropic_api_key
+        # (loaded from CELLAR_DOOR_ENV_FILE), silently bypassing our
+        # env-file-based secret loading until the first real call fails.
+        self._client = ChatAnthropic(model=self.model, api_key=get_settings().anthropic_api_key)
 
     async def complete_text(self, *, prompt: str) -> str:
         start = time.monotonic()
