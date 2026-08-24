@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.items import HalloweenCondition
+from app.models.items import HalloweenCondition, WineType
 
 Category = Literal["wine", "halloween", "other"]
 
@@ -58,13 +58,21 @@ class DescriptionOutput(BaseModel):
 
 
 class WineFields(BaseModel):
-    """Category-specific fields extract_structured produces for wine."""
+    """Category-specific fields extract_structured produces for wine.
+
+    Mirrors WineItem (app/models/items.py) field-for-field -- see this
+    module's docstring on why they're still separate models.
+    """
 
     producer: str | None = None
-    varietal: str | None = None
     vintage: int | None = Field(default=None, ge=1800, le=2100)
+    type: WineType | None = None
+    varietal: str | None = None
+    style: str | None = None
     region: str | None = None
+    appellation: str | None = None
     country: str | None = None
+    bottled_in: str | None = None
     bottle_size: str | None = None
 
 

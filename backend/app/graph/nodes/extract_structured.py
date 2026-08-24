@@ -28,6 +28,28 @@ from app.graph.schemas import (
 from app.graph.state import GraphState
 from app.providers import registry
 
+# Known variant spellings that must all collapse to one canonical
+# string -- a prompt instruction alone is a soft guarantee (the model
+# has to comply every single time), and country is used for filtering
+# a user's collection, where "USA" and "United States" being treated
+# as different countries would silently split someone's results.
+# Currently only United States variants are mapped, since that's the
+# observed inconsistency; extend as new ones are actually seen rather
+# than pre-guessing every country's variants.
+_COUNTRY_ALIASES: dict[str, str] = {
+    "usa": "United States",
+    "us": "United States",
+    "u.s.": "United States",
+    "u.s.a.": "United States",
+    "united states of america": "United States",
+}
+
+
+def _normalize_country(country: str | None) -> str | None:
+    if country is None:
+        return None
+    return _COUNTRY_ALIASES.get(country.strip().lower(), country)
+
 
 def _identify_summary(state: GraphState) -> str:
     if state.identify_result is None:
@@ -67,7 +89,9 @@ async def extract_structured(state: GraphState) -> GraphState:
             image=state.image,
             schema=WineExtractionResult,
         )
-        fields = wine_result.fields
+        fields = wine_result.fields.model_copy(
+            update={"country": _normalize_country(wine_result.fields.country)}
+        )
         confidence_scores = wine_result.confidence_scores
     else:
         halloween_result = await provider.complete_structured(
