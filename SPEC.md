@@ -373,7 +373,7 @@ The resume endpoint additionally verifies that the paused graph's `user_id` (sto
 ## Acceptance criteria
 
 **Happy path (wine, new-world):**
-Given a clear photo of a Beringer 2019 Cabernet Sauvignon from Napa Valley, `POST /items/from-photo` returns a payload with `producer="Beringer"`, `vintage=2019`, `type="red"`, `varietal="Cabernet Sauvignon"` (or close), `region="Napa Valley"`, `country="USA"`, and a non-empty title and description.
+Given a clear photo of a Beringer 2019 Cabernet Sauvignon from Napa Valley, `POST /items/from-photo` returns a payload with `producer="Beringer"`, `vintage=2019`, `type="red"`, `varietal="Cabernet Sauvignon"` (or close), `region="Napa Valley"`, `country="United States"`, and a non-empty title and description.
 
 **Happy path (wine, old-world monovarietal):**
 Given a clear photo of a Chablis Grand Cru wine (no varietal on the label), `POST /items/from-photo` returns a payload with `type="white"`, `varietal="Chardonnay"` (inferred from the appellation, with the description noting the inference), `region="Burgundy"`, `appellation="Chablis Grand Cru"`, `country="France"`, and a non-empty title and description.
