@@ -97,6 +97,9 @@ class BaseItem(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+WineType = Literal["red", "white", "rose", "sparkling", "dessert", "fortified"]
+
+
 class WineItem(BaseItem):
     """A bottle of wine."""
 
@@ -107,12 +110,6 @@ class WineItem(BaseItem):
         description="Winery or producer name as printed on the label. "
         "E.g., 'Beringer', 'Domaine de la Romanée-Conti'.",
     )
-    varietal: str | None = Field(
-        default=None,
-        description="Grape variety or blend name. E.g., 'Cabernet "
-        "Sauvignon', 'Pinot Noir', 'Red Blend'. If the label shows "
-        "multiple varietals, use the dominant one or 'Blend'.",
-    )
     vintage: int | None = Field(
         default=None,
         ge=1800,
@@ -121,17 +118,56 @@ class WineItem(BaseItem):
         "visible on the label (non-vintage wines, stylized numerals "
         "the model can't read confidently). Never guess.",
     )
+    type: WineType | None = Field(
+        default=None,
+        description="Broad wine category. E.g., 'red', 'sparkling'.",
+    )
+    varietal: str | None = Field(
+        default=None,
+        description="Grape variety or blend name. E.g., 'Cabernet "
+        "Sauvignon', 'Pinot Noir', 'Blend'. May be null for old-world "
+        "wines where the label shows the appellation instead of the "
+        "grape -- see the extraction contract's monovarietal-appellation "
+        "exception.",
+    )
+    style: str | None = Field(
+        default=None,
+        description="Sweetness or house style within a type. E.g., "
+        "'Brut', 'Reserve Brut', 'Demi-Sec', 'Dry', 'Late Harvest', "
+        "'Ruby', 'Tawny'.",
+    )
     region: str | None = Field(
         default=None,
-        description="Wine region as printed. E.g., 'Napa Valley', "
-        "'Bordeaux', 'Barossa Valley'. Prefer the most specific "
-        "region visible on the label.",
+        description="Broad geographic area the wine comes from. E.g., "
+        "'Napa Valley', 'Burgundy', 'Champagne', 'Bordeaux'.",
+    )
+    appellation: str | None = Field(
+        default=None,
+        description="Specific identifier for the wine within its "
+        "region -- a formal legal designation (AVA, AOC, DOCG, DOP) "
+        "or a widely-recognized sub-region within regions whose "
+        "sub-regions aren't formal appellations. E.g., 'St. Helena "
+        "AVA', 'Bâtard-Montrachet', 'Chablis Grand Cru', 'Barolo "
+        "DOCG', 'Côte des Bar' for Champagne. Named vineyards, crus, "
+        "and specific plots (Les Clos, Cannubi) do NOT go here -- "
+        "those belong in the description.",
     )
     country: str | None = Field(
         default=None,
-        description="Country of origin. E.g., 'United States', "
+        description="Country of origin. Always the full name, never "
+        "an abbreviation -- 'United States' (not 'USA' or 'US'), "
         "'France'. May be inferable from the region even if not "
-        "printed directly.",
+        "printed directly. Consistency matters: a user filtering "
+        "their collection by country needs every wine from the same "
+        "country to use the identical string.",
+    )
+    bottled_in: str | None = Field(
+        default=None,
+        description="City or municipality of the bottling facility, "
+        "from the 'produced and bottled by' line on the label. E.g., "
+        "'Épernay, France', 'St. Helena, California'. Never inferred "
+        "from region -- a wine from Napa Valley wasn't necessarily "
+        "bottled in Napa Valley.",
     )
     bottle_size: str | None = Field(
         default=None,

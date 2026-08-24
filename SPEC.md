@@ -161,7 +161,26 @@ The critical failure mode this contract prevents: when there is no text to trans
 - For each category-specific field, the value must be supported by evidence from the item itself: visible text on the label, or deterministic inference from visible evidence (e.g., country from region where region uniquely determines country). If neither, the field is `null`. Confidence score for a null field is `0.0`, not `null`. BaseItem fields (`description`, `notes`, `estimated_value`) are not this node's responsibility.
 - Numeric fields (vintage, year) must be supported by OCR output. A value passes if the digits appear in the OCR text, or if the value can be deterministically derived from text that does appear (e.g., "Nineteen Ninety-Nine" → 1999). Values not supportable by either test are nulled, regardless of the model's stated confidence.
 - `identify`'s output may inform what extraction looks for, but may not alone populate a field. Every populated structured field must have label-level evidence — visible text on the item, or deterministic inference from visible text. Identify's guess that this is "probably a Beringer Cabernet" is not sufficient to populate `producer="Beringer"`; that requires "Beringer" to appear in the OCR output or be visually clearly present on the label.
-- For an "other"-category item, node is skipped since there are no category-specific fields. 
+- For an "other"-category item, node is skipped since there are no category-specific fields.
+
+**Wine-specific rules for `extract_structured`:**
+
+Region vs. appellation:
+- `region` is the broad geographic area the wine comes from (Napa Valley, Burgundy, Champagne).
+- `appellation` is the specific identifier for the wine within its region. Populate with either a formal legal designation (AVA, AOC, DOCG, DOP) or a widely-recognized sub-region within regions whose sub-regions aren't formal appellations (e.g., Champagne's five sub-regions: Montagne de Reims, Vallée de la Marne, Côte des Blancs, Côte de Sézanne, Côte des Bar).
+- When the label shows only a region with no finer subdivision, populate `region` and leave `appellation` null.
+- Named vineyards, climats, crus, and specific plots (Les Clos, Cannubi, To Kalon) do NOT go in `appellation`. Mention them in the description instead.
+
+Varietal exception for monovarietal appellations:
+- General rule: `varietal` must appear on the label. Do NOT infer varietal from producer name, region, or model priors about what wineries typically make.
+- Exception: some appellations legally require a specific single grape variety. For these, populate `varietal` from the appellation even when varietal is not printed on the label. Examples include Chablis (Chardonnay), Barolo (Nebbiolo), Sancerre (Sauvignon Blanc for white, Pinot Noir for red), Brunello di Montalcino (Sangiovese), Cornas (Syrah), and Burgundy Grand/Premier Cru wines from the Côte d'Or (Chardonnay for whites, Pinot Noir for reds).
+- Only apply this exception when the appellation's legal specifications require a single specific grape variety. Do NOT apply to appellations that permit blends: Bordeaux (all levels), Rioja, standard Champagne (without Blanc de Blancs/Noirs designation), Côtes du Rhône, or any American AVA (all AVAs permit multiple varietals).
+- When populating varietal via this exception, add a note to the description indicating the source: e.g., "Chardonnay inferred from Chablis Grand Cru appellation."
+- When uncertain whether an appellation qualifies, leave `varietal` null. Null is always the safe answer.
+
+Bottled_in vs. region:
+- `bottled_in` is the physical location of the winery that bottled the wine, from the "produced and bottled by" line on the label. It is a specific city or municipality plus state/country (e.g., "St. Helena, California", "Épernay, France").
+- Never infer `bottled_in` from `region`. A wine from Napa Valley wasn't necessarily bottled in Napa Valley.
 
 **`validate`**
 - Non-model node. Runs Pydantic on the extraction output. On validation failure: blank the invalid fields, flag them in `confidence_scores` as `0.0`, add the validation error to the response payload for user visibility. Do NOT retry in the MVP (retry is planned in `EXPERIMENTS.md` as E3).
@@ -228,11 +247,15 @@ Single `items` table. Base fields as real columns, category-specific fields in a
 
 ### WineItem(BaseItem)
 
-- `producer: str | None`
-- `varietal: str | None`
-- `vintage: int | None`
-- `region: str | None`
-- `country: str | None`
+- `producer: str | None` — winery or producer name as printed on the label
+- `vintage: int | None` — year the grapes were harvested. May be null for non-vintage wines.
+- `type: Literal["red", "white", "rose", "sparkling", "dessert", "fortified"] | None` — broad wine category
+- `varietal: str | None` — grape variety or blend name (e.g., "Cabernet Sauvignon", "Pinot Noir", "Blend"). May be null for old-world wines where the label shows the appellation instead of the grape. See the extraction contract for the monovarietal-appellation exception.
+- `style: str | None` — sweetness or house style within a type (e.g., "Brut", "Reserve Brut", "Demi-Sec", "Dry", "Late Harvest", "Ruby", "Tawny")
+- `region: str | None` — broad geographic area the wine comes from (e.g., "Napa Valley", "Burgundy", "Champagne", "Bordeaux")
+- `appellation: str | None` — specific identifier for the wine within its region. Either a formal legal designation (AVA, AOC, DOCG, DOP) or a widely-recognized sub-region within regions whose sub-regions aren't formal appellations (e.g., "St. Helena AVA", "Bâtard-Montrachet", "Chablis Grand Cru", "Barolo DOCG", "Côte des Bar" for Champagne). Cru distinctions, named vineyards, and specific plots (Les Clos, Cannubi) do NOT go here — those belong in the description.
+- `country: str | None` — country of production
+- `bottled_in: str | None` — city or municipality of the bottling facility, from the "produced and bottled by" line on the label (e.g., "Épernay, France", "St. Helena, California")
 - `bottle_size: str | None` (e.g., "750ml", "1.5L")
 
 ### HalloweenItem(BaseItem)
@@ -349,8 +372,14 @@ The resume endpoint additionally verifies that the paused graph's `user_id` (sto
 
 ## Acceptance criteria
 
-**Happy path (wine):**
-Given a clear photo of a Beringer 2019 Cabernet, `POST /items/from-photo` returns a payload with `producer="Beringer"`, `vintage=2019`, `varietal="Cabernet Sauvignon"` (or close), and a non-empty title and description.
+**Happy path (wine, new-world):**
+Given a clear photo of a Beringer 2019 Cabernet Sauvignon from Napa Valley, `POST /items/from-photo` returns a payload with `producer="Beringer"`, `vintage=2019`, `type="red"`, `varietal="Cabernet Sauvignon"` (or close), `region="Napa Valley"`, `country="USA"`, and a non-empty title and description.
+
+**Happy path (wine, old-world monovarietal):**
+Given a clear photo of a Chablis Grand Cru wine (no varietal on the label), `POST /items/from-photo` returns a payload with `type="white"`, `varietal="Chardonnay"` (inferred from the appellation, with the description noting the inference), `region="Burgundy"`, `appellation="Chablis Grand Cru"`, `country="France"`, and a non-empty title and description.
+
+**Happy path (wine, Champagne sub-region):**
+Given a clear photo of a Champagne bottle labeled with a Côte des Bar producer, `POST /items/from-photo` returns a payload with `type="sparkling"`, `region="Champagne"`, `appellation="Côte des Bar"`, `country="France"`, `varietal=null`, and a non-empty title and description.
 
 **Happy path (Halloween):**
 Given a clear photo of a Funko Pop Jack Skellington, `POST /items/from-photo` returns a payload with `manufacturer="Funko"`, `character_or_series="Jack Skellington"` (or close), and a non-empty title and description.

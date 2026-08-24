@@ -35,10 +35,14 @@ async def test_extract_structured_wine(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.structured_fields == {
         "producer": "Beringer",
-        "varietal": "Cabernet Sauvignon",
         "vintage": 2019,
+        "type": None,
+        "varietal": "Cabernet Sauvignon",
+        "style": None,
         "region": None,
+        "appellation": None,
         "country": None,
+        "bottled_in": None,
         "bottle_size": None,
     }
     assert result.confidence_scores["producer"] == 0.9
@@ -92,6 +96,53 @@ async def test_extract_structured_forces_condition_null_even_if_model_populates_
     assert result.structured_fields["manufacturer"] == "Funko"  # untouched
     assert "condition" not in result.confidence_scores
     assert result.confidence_scores["manufacturer"] == 0.8  # untouched
+
+
+@pytest.mark.parametrize(
+    "variant", ["USA", "usa", "US", "u.s.", "U.S.A.", "United States of America"]
+)
+async def test_extract_structured_normalizes_country_variants_to_united_states(
+    monkeypatch: pytest.MonkeyPatch, variant: str
+) -> None:
+    # A prompt instruction alone is a soft guarantee -- the model has to
+    # comply every time. This pins down the code-level safety net: known
+    # United States variant spellings always collapse to one canonical
+    # string, so a user filtering their collection by country never gets
+    # split results because of a phrasing difference.
+    canned = WineExtractionResult(
+        fields=WineFields(producer="Beringer", country=variant),
+        confidence_scores={"producer": 0.9, "country": 0.9},
+    )
+    mock = make_mock_provider(node_name="extract_structured", returns=canned)
+    monkeypatch.setattr(registry, "provider_for", lambda node_name: mock)
+
+    state = GraphState(
+        image=load_fixture("placeholder.png"), user_id=uuid4(), confirmed_category="wine"
+    )
+    result = await extract_structured(state)
+
+    assert result.structured_fields is not None
+    assert result.structured_fields["country"] == "United States"
+    assert result.structured_fields["producer"] == "Beringer"  # untouched
+
+
+async def test_extract_structured_leaves_unrecognized_country_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canned = WineExtractionResult(
+        fields=WineFields(country="France"),
+        confidence_scores={"country": 0.9},
+    )
+    mock = make_mock_provider(node_name="extract_structured", returns=canned)
+    monkeypatch.setattr(registry, "provider_for", lambda node_name: mock)
+
+    state = GraphState(
+        image=load_fixture("placeholder.png"), user_id=uuid4(), confirmed_category="wine"
+    )
+    result = await extract_structured(state)
+
+    assert result.structured_fields is not None
+    assert result.structured_fields["country"] == "France"
 
 
 async def test_extract_structured_skipped_for_other(monkeypatch: pytest.MonkeyPatch) -> None:

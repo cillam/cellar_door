@@ -420,10 +420,14 @@ def _wine_payload(user_id: UUID, **overrides: Any) -> dict[str, Any]:
         "created_at": "2020-01-01T00:00:00Z",
         "updated_at": "2020-01-01T00:00:00Z",
         "producer": "Beringer",
-        "varietal": "Cabernet Sauvignon",
         "vintage": 2019,
-        "region": None,
-        "country": None,
+        "type": "red",
+        "varietal": "Cabernet Sauvignon",
+        "style": None,
+        "region": "Napa Valley",
+        "appellation": None,
+        "country": "United States",
+        "bottled_in": None,
         "bottle_size": None,
     }
     payload.update(overrides)

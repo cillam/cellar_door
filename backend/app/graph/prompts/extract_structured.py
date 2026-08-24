@@ -34,11 +34,78 @@ Known failure modes:
   isn't one, or invented when no vintage/year is visible at all.
 """
 
+_WINE_SPECIFIC_RULES = """Region vs. appellation:
+- `region` is the broad geographic area the wine comes from (Napa
+  Valley, Burgundy, Champagne).
+- `appellation` is the specific identifier for the wine within its
+  region. Populate with either a formal legal designation (AVA, AOC,
+  DOCG, DOP) or a widely-recognized sub-region within regions whose
+  sub-regions aren't formal appellations (e.g. Champagne's five
+  sub-regions: Montagne de Reims, Vallée de la Marne, Côte des Blancs,
+  Côte de Sézanne, Côte des Bar).
+- When the label shows only a region with no finer subdivision,
+  populate `region` and leave `appellation` null.
+- Named vineyards, climats, crus, and specific plots (Les Clos,
+  Cannubi, To Kalon) do NOT go in `appellation`. Mention them in the
+  description instead.
+
+Varietal exception for monovarietal appellations:
+- General rule: `varietal` must appear on the label. Do NOT infer
+  varietal from producer name, region, or model priors about what
+  wineries typically make.
+- Exception: some appellations legally require a specific single grape
+  variety. For these, populate `varietal` from the appellation even
+  when varietal is not printed on the label. Examples include Chablis
+  (Chardonnay), Barolo (Nebbiolo), Sancerre (Sauvignon Blanc for
+  white, Pinot Noir for red), Brunello di Montalcino (Sangiovese),
+  Cornas (Syrah), and Burgundy Grand/Premier Cru wines from the Côte
+  d'Or (Chardonnay for whites, Pinot Noir for reds).
+- Only apply this exception when the appellation's legal specifications
+  require a single specific grape variety. Do NOT apply to
+  appellations that permit blends: Bordeaux (all levels), Rioja,
+  standard Champagne (without Blanc de Blancs/Noirs designation),
+  Côtes du Rhône, or any American AVA (all AVAs permit multiple
+  varietals).
+- When populating varietal via this exception, add a note to the
+  description indicating the source: e.g., "Chardonnay inferred from
+  Chablis Grand Cru appellation."
+- When uncertain whether an appellation qualifies, leave `varietal`
+  null. Null is always the safe answer.
+
+Bottled_in vs. region:
+- `bottled_in` is the physical location of the winery that bottled the
+  wine, from the "produced and bottled by" line on the label. It is a
+  specific city or municipality plus state/country (e.g., "St. Helena,
+  California", "Épernay, France").
+- Never infer `bottled_in` from `region`. A wine from Napa Valley
+  wasn't necessarily bottled in Napa Valley.
+
+Style vs. proprietary names:
+- `style` is limited to sweetness/house-style descriptors -- terms
+  describing how the wine was made, not what it's called. See the
+  field's own examples: Brut, Reserve Brut, Demi-Sec, Dry, Late
+  Harvest, Ruby, Tawny.
+- A cuvée, special bottling, or proprietary wine name (e.g. "The Lark
+  Ascending", "Opus One", "Insignia") is NOT a style, even when it's
+  the most prominent text on the label. Leave `style` null and let it
+  surface in the description instead -- the same treatment named
+  vineyards get under `appellation`.
+- When uncertain whether a label term is a sweetness/house-style
+  descriptor or a proprietary name, leave `style` null.
+
+Country naming:
+- Always use the full country name, never an abbreviation or code --
+  "United States", not "USA" or "US". This must be consistent across
+  every extraction: a user filtering their collection by country
+  needs every wine from the same country to use the identical string.
+"""
+
 WINE_EXTRACTION_PROMPT = (
     """Extract the following fields for a bottle of wine, from the photo and
 the OCR text below. Return null for any field without direct evidence.
 
-Fields: producer, varietal, vintage, region, country, bottle_size.
+Fields: producer, vintage, type, varietal, style, region, appellation,
+country, bottled_in, bottle_size.
 
 Identification (context only, not evidence on its own):
 {identify_summary}
@@ -48,6 +115,8 @@ OCR result:
 
 """
     + _EVIDENCE_RULES
+    + "\n"
+    + _WINE_SPECIFIC_RULES
 )
 
 HALLOWEEN_EXTRACTION_PROMPT = (
