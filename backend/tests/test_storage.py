@@ -26,7 +26,7 @@ def _client_with_mock_transport(handler: httpx.MockTransport) -> SupabaseStorage
     )
     client._client = httpx.AsyncClient(
         base_url="https://placeholder.supabase.co",
-        headers={"Authorization": "Bearer placeholder-key"},
+        headers={"apikey": "placeholder-key"},
         transport=handler,
     )
     return client
