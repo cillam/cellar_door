@@ -27,6 +27,11 @@ import httpx
 from app.config import get_settings
 
 # Real bucket name (created in the Supabase dashboard, step 5), private.
+# Not used in any URL construction below -- every `path` this app ever
+# passes around (BaseItem.photo_url, POST /items/from-photo's
+# storage_path) already has this as its own leading segment, e.g.
+# "photos/<user_id>/<uuid>.jpg". Kept here only as a named reference for
+# that convention, e.g. the auth check in app/routers/items.py.
 _PHOTOS_BUCKET = "photos"
 
 
@@ -37,6 +42,11 @@ class StorageClient(ABC):
     async def download(self, path: str) -> bytes:
         """Fetch a stored object's bytes -- e.g. a photo for the graph
         pipeline (POST /items/from-photo loads the image this way).
+
+        `path` is the full storage path including the bucket name as
+        its leading segment (e.g. "photos/<user_id>/<uuid>.jpg") -- the
+        same string as BaseItem.photo_url and the from-photo request's
+        storage_path, never a bucket-relative path.
 
         Raises `FileNotFoundError` if `path` doesn't exist -- both
         implementations (MockStorageClient in tests/conftest.py,
@@ -49,13 +59,15 @@ class StorageClient(ABC):
     @abstractmethod
     async def delete(self, path: str) -> None:
         """Delete a stored object -- e.g. an item's photo on
-        DELETE /items/{id}.
+        DELETE /items/{id}. `path` is the full storage path, per
+        download()'s docstring.
         """
         raise NotImplementedError
 
     @abstractmethod
     async def signed_url(self, path: str, *, expires_in_seconds: int = 3600) -> str:
-        """A temporary signed URL for reading an object.
+        """A temporary signed URL for reading an object. `path` is the
+        full storage path, per download()'s docstring.
 
         BaseItem.photo_url (app/models/items.py) is a storage *path*,
         not a usable URL -- its docstring says "Signed URLs are
@@ -76,9 +88,7 @@ class SupabaseStorageClient(StorageClient):
         *,
         base_url: str,
         secret_key: str,
-        bucket: str = _PHOTOS_BUCKET,
     ) -> None:
-        self._bucket = bucket
         # `apikey`, not `Authorization: Bearer` -- confirmed against real
         # Supabase Storage (step 7's deploy verification): the current
         # "secret key" format isn't itself a JWT, and Storage's object
@@ -95,7 +105,12 @@ class SupabaseStorageClient(StorageClient):
         )
 
     async def download(self, path: str) -> bytes:
-        response = await self._client.get(f"/storage/v1/object/{self._bucket}/{path}")
+        # No separate bucket segment -- `path` already has it as its
+        # leading component (see StorageClient.download's docstring).
+        # Confirmed against real Supabase Storage (step 7): prepending
+        # one produced "/object/photos/photos/..." and a 400 -- a bug
+        # a prior test had locked in as intended (see PR history).
+        response = await self._client.get(f"/storage/v1/object/{path}")
         if response.status_code == 404:
             raise FileNotFoundError(path)
         response.raise_for_status()
@@ -108,12 +123,12 @@ class SupabaseStorageClient(StorageClient):
         # real, valid endpoints (confirmed against Supabase's storage
         # API reference), but the single-object form needs no body and
         # matches download()'s path shape.
-        response = await self._client.delete(f"/storage/v1/object/{self._bucket}/{path}")
+        response = await self._client.delete(f"/storage/v1/object/{path}")
         response.raise_for_status()
 
     async def signed_url(self, path: str, *, expires_in_seconds: int = 3600) -> str:
         response = await self._client.post(
-            f"/storage/v1/object/sign/{self._bucket}/{path}",
+            f"/storage/v1/object/sign/{path}",
             json={"expiresIn": expires_in_seconds},
         )
         response.raise_for_status()
