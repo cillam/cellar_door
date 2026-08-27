@@ -79,9 +79,19 @@ class SupabaseStorageClient(StorageClient):
         bucket: str = _PHOTOS_BUCKET,
     ) -> None:
         self._bucket = bucket
+        # `apikey`, not `Authorization: Bearer` -- confirmed against real
+        # Supabase Storage (step 7's deploy verification): the current
+        # "secret key" format isn't itself a JWT, and Storage's object
+        # endpoints respond 400 "Invalid Compact JWS" when handed one as
+        # a bearer token (it tries to parse the header as a JWT). `apikey`
+        # is the header Supabase's own REST APIs (Auth, Storage) expect
+        # for an API-key-based credential like this one, as opposed to a
+        # user's JWT from sign-in. Never caught before now because every
+        # prior test used MockStorageClient -- this class had never been
+        # exercised against real Supabase until this point.
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            headers={"Authorization": f"Bearer {secret_key}"},
+            headers={"apikey": secret_key},
         )
 
     async def download(self, path: str) -> bytes:
