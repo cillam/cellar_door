@@ -26,13 +26,14 @@ import httpx
 
 from app.config import get_settings
 
-# Real bucket name (created in the Supabase dashboard, step 5), private.
-# Not used in any URL construction below -- every `path` this app ever
-# passes around (BaseItem.photo_url, POST /items/from-photo's
-# storage_path) already has this as its own leading segment, e.g.
-# "photos/<user_id>/<uuid>.jpg". Kept here only as a named reference for
-# that convention, e.g. the auth check in app/routers/items.py.
-_PHOTOS_BUCKET = "photos"
+# The real bucket name is "photos" (created in the Supabase dashboard,
+# step 5, private) -- not a named constant here, since nothing in this
+# file constructs a URL from it. Every `path` this app ever passes
+# around (BaseItem.photo_url, POST /items/from-photo's storage_path)
+# already has "photos" as its own leading segment, e.g.
+# "photos/<user_id>/<uuid>.jpg" -- see StorageClient.download's
+# docstring below and app/routers/items.py's auth checks, which hard-
+# code the same literal for the same reason.
 
 
 class StorageClient(ABC):
