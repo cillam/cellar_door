@@ -1,0 +1,44 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files -- real secrets live outside the repo (see .env.example
+# and CELLAR_DOOR_MOBILE_ENV_FILE in app.config.ts); .env here is only ever
+# a local convenience fallback and must never be committed.
+.env
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
