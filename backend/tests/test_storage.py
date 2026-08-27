@@ -73,6 +73,13 @@ def test_supabase_storage_client_constructs_without_real_credentials() -> None:
         secret_key="placeholder-key",
     )
     assert isinstance(client, StorageClient)
+    # Regression test for the apikey-vs-Authorization bug (found against
+    # real Supabase Storage, step 7) -- every other test in this file
+    # goes through _client_with_mock_transport, which swaps out _client
+    # entirely before any request is made, so nothing else here actually
+    # asserts on __init__'s real header-setting logic.
+    assert client._client.headers["apikey"] == "placeholder-key"
+    assert "authorization" not in client._client.headers
 
 
 async def test_supabase_storage_client_signed_url_joins_base_url_correctly() -> None:
@@ -81,17 +88,22 @@ async def test_supabase_storage_client_signed_url_joins_base_url_correctly() -> 
     # set), so naive string concatenation produced a malformed URL
     # (missing "/" before "storage"). base_url.join() must handle this
     # regardless of trailing-slash state.
+    seen_requests: list[httpx.Request] = []
+
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, json={"signedURL": "/object/sign/bucket/photos/u1/a.jpg?token=abc"}
-        )
+        seen_requests.append(request)
+        return httpx.Response(200, json={"signedURL": "/object/sign/photos/u1/a.jpg?token=abc"})
 
     client = _client_with_mock_transport(httpx.MockTransport(handler))
 
     url = await client.signed_url("photos/u1/a.jpg")
 
+    # No separate bucket segment -- same bug/fix as delete()'s
+    # regression test above; "path" already has "photos" as its own
+    # leading component.
+    assert seen_requests[0].url.path == "/storage/v1/object/sign/photos/u1/a.jpg"
     assert url == (
-        "https://placeholder.supabase.co/storage/v1/object/sign/bucket/photos/u1/a.jpg?token=abc"
+        "https://placeholder.supabase.co/storage/v1/object/sign/photos/u1/a.jpg?token=abc"
     )
 
 
@@ -124,11 +136,13 @@ async def test_supabase_storage_client_delete_hits_single_object_endpoint() -> N
 
     await client.delete("photos/u1/a.jpg")
 
-    # _client_with_mock_transport uses the default bucket ("photos", see
-    # _PHOTOS_BUCKET) -- so the URL has "photos" twice: once as the
-    # bucket segment, once as the path's own prefix convention
-    # (photos/<user_id>/<uuid>.jpg). Distinct, coincidentally same word.
+    # Regression test for a real bug (found against real Supabase
+    # Storage, step 7): `path` already has "photos" as its own leading
+    # segment (the app's storage_path/photo_url convention), so the
+    # bucket must NOT be prepended again -- an earlier version of this
+    # test asserted the doubled "photos/photos/..." URL as correct,
+    # which is exactly the bug a real 400 from Supabase caught.
     assert len(seen_requests) == 1
     assert seen_requests[0].method == "DELETE"
-    assert seen_requests[0].url.path == "/storage/v1/object/photos/photos/u1/a.jpg"
+    assert seen_requests[0].url.path == "/storage/v1/object/photos/u1/a.jpg"
     assert seen_requests[0].content == b""
