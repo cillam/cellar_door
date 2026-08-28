@@ -44,6 +44,7 @@ function RootNavigator() {
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="item/[id]" options={{ headerShown: true, title: 'Item' }} />
+      <Stack.Screen name="capture/progress" options={{ headerShown: true, title: 'Adding Item' }} />
     </Stack>
   );
 }
