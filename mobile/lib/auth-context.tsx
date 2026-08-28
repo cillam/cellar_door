@@ -4,6 +4,12 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { supabase } from './supabase';
 
 type AuthResult = { error: string | null };
+/** signUp() additionally reports whether the account needs email
+ * confirmation before it has a session -- Supabase returns success with
+ * no session in that case, which sign-up.tsx needs to tell apart from
+ * "signed up and already signed in" to know whether to show a
+ * confirm-your-email message. */
+type SignUpResult = AuthResult & { needsEmailConfirmation: boolean };
 
 type AuthContextValue = {
   session: Session | null;
@@ -11,8 +17,8 @@ type AuthContextValue = {
    * per-action loading state (that lives in each screen, per field). */
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<AuthResult>;
-  signUp: (email: string, password: string) => Promise<AuthResult>;
-  signOut: () => Promise<void>;
+  signUp: (email: string, password: string) => Promise<SignUpResult>;
+  signOut: () => Promise<AuthResult>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -54,11 +60,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: error?.message ?? null };
       },
       signUp: async (email: string, password: string) => {
-        const { error } = await supabase.auth.signUp({ email, password });
-        return { error: error?.message ?? null };
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        return {
+          error: error?.message ?? null,
+          // Supabase returns success with data.session === null when the
+          // project requires email confirmation -- that's the only signal
+          // available to tell "needs confirmation" apart from "signed up
+          // and already has a session" (email-confirmation-disabled case).
+          needsEmailConfirmation: !error && data.session === null,
+        };
       },
       signOut: async () => {
-        await supabase.auth.signOut();
+        const { error } = await supabase.auth.signOut();
+        return { error: error?.message ?? null };
       },
     }),
     [session, isLoading],

@@ -26,7 +26,7 @@ export default function SignUpScreen() {
     }
 
     setIsSubmitting(true);
-    const { error: signUpError } = await signUp(email, password);
+    const { error: signUpError, needsEmailConfirmation } = await signUp(email, password);
     setIsSubmitting(false);
 
     if (signUpError) {
@@ -34,12 +34,17 @@ export default function SignUpScreen() {
       return;
     }
 
-    // If Supabase's email-confirmation setting is on, signUp() succeeds
-    // without producing an active session -- app/_layout.tsx's redirect
-    // effect only fires once a session exists, so without this message
-    // the user would be left looking at an unchanged sign-up form with
-    // no explanation of what to do next.
-    setConfirmationMessage('Check your email to confirm your account, then sign in.');
+    // Only relevant when the Supabase project requires email confirmation
+    // -- signUp() then succeeds without producing an active session, and
+    // app/_layout.tsx's redirect effect only fires once a session exists,
+    // so without this message the user would be left looking at an
+    // unchanged sign-up form with no explanation of what to do next. When
+    // email confirmation is disabled, signUp() already has a session and
+    // that same redirect effect takes over immediately -- showing this
+    // message in that case would be actively wrong, not just redundant.
+    if (needsEmailConfirmation) {
+      setConfirmationMessage('Check your email to confirm your account, then sign in.');
+    }
   };
 
   return (

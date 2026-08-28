@@ -30,8 +30,8 @@ describe('SignUpScreen', () => {
     expect(signUp).not.toHaveBeenCalled();
   });
 
-  it('shows the email-confirmation message when signUp succeeds without a session', async () => {
-    const signUp = jest.fn().mockResolvedValue({ error: null });
+  it('shows the email-confirmation message when the project requires it', async () => {
+    const signUp = jest.fn().mockResolvedValue({ error: null, needsEmailConfirmation: true });
     mockUseAuth.mockReturnValue({ signUp });
 
     await render(<SignUpScreen />);
@@ -46,6 +46,26 @@ describe('SignUpScreen', () => {
       ).toBeTruthy();
     });
     expect(signUp).toHaveBeenCalledWith('new-user@cellar-door.dev', 'password123');
+  });
+
+  it('does not show the email-confirmation message when signUp already produced a session', async () => {
+    // Regression case: a project with email confirmation disabled gets a
+    // session immediately, and app/_layout.tsx's redirect effect takes
+    // over -- showing "check your email" here would be actively wrong,
+    // not just redundant.
+    const signUp = jest.fn().mockResolvedValue({ error: null, needsEmailConfirmation: false });
+    mockUseAuth.mockReturnValue({ signUp });
+
+    await render(<SignUpScreen />);
+    await fireEvent.changeText(screen.getByPlaceholderText('Email'), 'new-user@cellar-door.dev');
+    await fireEvent.changeText(screen.getByPlaceholderText('Password'), 'password123');
+    await fireEvent.changeText(screen.getByPlaceholderText('Confirm password'), 'password123');
+    await fireEvent.press(screen.getByTestId('sign-up-submit'));
+
+    await waitFor(() => expect(signUp).toHaveBeenCalled());
+    expect(
+      screen.queryByText('Check your email to confirm your account, then sign in.'),
+    ).toBeNull();
   });
 
   it('shows the error returned by signUp on failure', async () => {

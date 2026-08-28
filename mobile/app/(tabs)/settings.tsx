@@ -6,17 +6,26 @@ import { useAuth } from '../../lib/auth-context';
 export default function SettingsScreen() {
   const { signOut } = useAuth();
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSignOut = async () => {
+    setError(null);
     setIsSigningOut(true);
-    await signOut();
-    // app/_layout.tsx's redirect effect sends the user back to (auth)
-    // once session becomes null -- no navigation call needed here.
+    const { error: signOutError } = await signOut();
+    // Always reset, success or failure -- on success app/_layout.tsx's
+    // redirect effect unmounts this screen anyway once session becomes
+    // null, but on failure leaving isSigningOut true would permanently
+    // disable the button with no way to retry.
+    setIsSigningOut(false);
+    if (signOutError) {
+      setError(signOutError);
+    }
   };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Settings</Text>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pressable
         testID="sign-out-button"
         style={styles.button}
@@ -43,6 +52,10 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 18,
     fontWeight: '600',
+  },
+  error: {
+    color: '#c0392b',
+    textAlign: 'center',
   },
   button: {
     backgroundColor: '#c0392b',
