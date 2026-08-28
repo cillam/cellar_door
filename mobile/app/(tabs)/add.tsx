@@ -20,11 +20,13 @@ import {
 const MAX_DIMENSION = 1600;
 const JPEG_QUALITY = 0.8;
 
+type CapturedPhoto = { uri: string; width: number; height: number };
+
 export default function AddItemScreen() {
   const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
-  const [capturedUri, setCapturedUri] = useState<string | null>(null);
+  const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,7 +35,7 @@ export default function AddItemScreen() {
     try {
       const photo = await cameraRef.current?.takePictureAsync({ quality: 0.9 });
       if (photo) {
-        setCapturedUri(photo.uri);
+        setCapturedPhoto({ uri: photo.uri, width: photo.width, height: photo.height });
       }
     } catch {
       setError('Could not take photo. Try again.');
@@ -41,16 +43,26 @@ export default function AddItemScreen() {
   };
 
   const handleRetake = () => {
-    setCapturedUri(null);
+    setCapturedPhoto(null);
     setError(null);
   };
 
   const handleConfirm = async () => {
-    if (!capturedUri) return;
+    if (!capturedPhoto) return;
     setError(null);
     setIsProcessing(true);
     try {
-      const context = ImageManipulator.manipulate(capturedUri).resize({ width: MAX_DIMENSION });
+      // resize({width}) alone scales height to match the source aspect
+      // ratio rather than capping it -- for a portrait photo (the common
+      // case here: bottles and figures held upright, taller than wide),
+      // that leaves height as the larger, unconstrained dimension. Resize
+      // on whichever side is actually longest so MAX_DIMENSION is a real
+      // cap on both axes, not just width.
+      const resizeOptions =
+        capturedPhoto.height >= capturedPhoto.width
+          ? { height: MAX_DIMENSION }
+          : { width: MAX_DIMENSION };
+      const context = ImageManipulator.manipulate(capturedPhoto.uri).resize(resizeOptions);
       const rendered = await context.renderAsync();
       const result = await rendered.saveAsync({
         compress: JPEG_QUALITY,
@@ -101,10 +113,10 @@ export default function AddItemScreen() {
     );
   }
 
-  if (capturedUri) {
+  if (capturedPhoto) {
     return (
       <View style={styles.container}>
-        <Image source={{ uri: capturedUri }} style={styles.preview} />
+        <Image source={{ uri: capturedPhoto.uri }} style={styles.preview} />
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <View style={styles.previewActions}>
           <Pressable

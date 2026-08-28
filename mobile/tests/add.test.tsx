@@ -77,7 +77,7 @@ describe('AddItemScreen', () => {
     openSettingsSpy.mockRestore();
   });
 
-  it('goes from capture to preview to confirm, resizing and navigating with the result', async () => {
+  it('goes from capture to preview to confirm, capping width on a landscape photo', async () => {
     mockUseCameraPermissions.mockReturnValue([
       { granted: true, canAskAgain: true, status: 'granted', expires: 'never' },
       mockRequestPermission,
@@ -103,6 +103,31 @@ describe('AddItemScreen', () => {
       pathname: '/capture/progress',
       params: { photoUri: mockManipulateResult.uri },
     });
+  });
+
+  it('caps height, not width, on a portrait photo', async () => {
+    // Regression case for the PR #35 review finding: resize({width}) alone
+    // scales height to preserve aspect ratio rather than capping it, so a
+    // portrait photo (bottles/figures held upright -- the common case
+    // here) needs the height side constrained instead, or the true longer
+    // dimension is left over MAX_DIMENSION.
+    mockUseCameraPermissions.mockReturnValue([
+      { granted: true, canAskAgain: true, status: 'granted', expires: 'never' },
+      mockRequestPermission,
+    ]);
+    mockTakePictureAsync.mockResolvedValue({
+      uri: 'file:///raw-photo.jpg',
+      width: 3000,
+      height: 4000,
+    });
+
+    await render(<AddItemScreen />);
+    await fireEvent.press(screen.getByTestId('capture-button'));
+    await waitFor(() => expect(screen.getByTestId('confirm-button')).toBeTruthy());
+    await fireEvent.press(screen.getByTestId('confirm-button'));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalled());
+    expect(mockResize).toHaveBeenCalledWith({ height: 1600 });
   });
 
   it('returns to the camera view on retake', async () => {
@@ -140,5 +165,32 @@ describe('AddItemScreen', () => {
       expect(screen.getByText('Could not take photo. Try again.')).toBeTruthy();
     });
     expect(screen.getByTestId('capture-button')).toBeTruthy();
+  });
+
+  it('shows an error and stays on the preview when resize/processing fails', async () => {
+    mockUseCameraPermissions.mockReturnValue([
+      { granted: true, canAskAgain: true, status: 'granted', expires: 'never' },
+      mockRequestPermission,
+    ]);
+    mockTakePictureAsync.mockResolvedValue({
+      uri: 'file:///raw-photo.jpg',
+      width: 4000,
+      height: 3000,
+    });
+    mockRenderAsync.mockRejectedValueOnce(new Error('native manipulation failure'));
+
+    await render(<AddItemScreen />);
+    await fireEvent.press(screen.getByTestId('capture-button'));
+    await waitFor(() => expect(screen.getByTestId('confirm-button')).toBeTruthy());
+    await fireEvent.press(screen.getByTestId('confirm-button'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Could not process photo. Try again.')).toBeTruthy();
+    });
+    // Stays on the preview (not bounced back to the live camera) so the
+    // user can just retry Confirm without recapturing.
+    expect(screen.getByTestId('confirm-button')).toBeTruthy();
+    expect(screen.getByTestId('retake-button')).toBeTruthy();
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });
