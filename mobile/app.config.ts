@@ -63,6 +63,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         cameraPermission: 'Cellar Door uses the camera to photograph items for your inventory.',
       },
     ],
+    'expo-secure-store',
   ],
   experiments: {
     typedRoutes: true,

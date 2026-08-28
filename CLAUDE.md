@@ -33,7 +33,7 @@ A mobile-first home inventory app for wine and Halloween collectibles, plus a ca
 - **Auth:** Supabase Auth, JWT verified on backend
 - **AI:** Claude via Anthropic API, structured outputs via Pydantic discriminated unions
 - **Deploy:** FastAPI → Railway, mobile → Expo preview builds
-- **CI:** GitHub Actions — backend (`ruff`, `mypy --strict`, `pytest`), mobile (`tsc --noEmit`, `vitest`, `eslint`)
+- **CI:** GitHub Actions — backend (`ruff`, `mypy --strict`, `pytest`), mobile (`tsc --noEmit`, `jest-expo`, `eslint`)
 
 ## Directory conventions
 
@@ -120,7 +120,7 @@ A mobile-first home inventory app for wine and Halloween collectibles, plus a ca
 
 A change is ready to merge when:
 1. `ruff check`, `mypy --strict`, and `pytest` pass on the backend
-2. `tsc --noEmit`, `vitest run`, and `eslint` pass on the mobile app
+2. `tsc --noEmit`, `jest-expo run`, and `eslint` pass on the mobile app
 3. The change has a test that would have failed before the change
 
 Run the gates locally before pushing. CI is a backstop, not a first-try discovery tool — if you're pushing to see if CI passes, you've already lost 5 minutes and slowed down every collaborator (human or agent) waiting on the build.
