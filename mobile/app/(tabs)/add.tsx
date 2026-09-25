@@ -28,10 +28,17 @@ export default function AddItemScreen() {
   const cameraRef = useRef<CameraView>(null);
   const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleCapture = async () => {
+    // expo-camera says to wait for onCameraReady before takePictureAsync;
+    // a tap before then (or a second tap mid-capture) is ignored rather
+    // than silently lost. The button is also visually disabled below.
+    if (!isCameraReady || isCapturing) return;
     setError(null);
+    setIsCapturing(true);
     try {
       const photo = await cameraRef.current?.takePictureAsync({ quality: 0.9 });
       if (photo) {
@@ -39,11 +46,14 @@ export default function AddItemScreen() {
       }
     } catch {
       setError('Could not take photo. Try again.');
+    } finally {
+      setIsCapturing(false);
     }
   };
 
   const handleRetake = () => {
     setCapturedPhoto(null);
+    setIsCameraReady(false);
     setError(null);
   };
 
@@ -146,10 +156,20 @@ export default function AddItemScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+      <CameraView
+        ref={cameraRef}
+        style={styles.camera}
+        facing="back"
+        onCameraReady={() => setIsCameraReady(true)}
+      />
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <View style={styles.captureRow}>
-        <Pressable style={styles.captureButton} onPress={handleCapture} testID="capture-button" />
+        <Pressable
+          style={[styles.captureButton, (!isCameraReady || isCapturing) && styles.captureDisabled]}
+          onPress={handleCapture}
+          disabled={!isCameraReady || isCapturing}
+          testID="capture-button"
+        />
       </View>
     </View>
   );
@@ -187,6 +207,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderWidth: 4,
     borderColor: '#ccc',
+  },
+  captureDisabled: {
+    opacity: 0.4,
   },
   previewActions: {
     position: 'absolute',
