@@ -1,5 +1,4 @@
 import * as Crypto from 'expo-crypto';
-import { File } from 'expo-file-system';
 
 import { supabase } from './supabase';
 
@@ -35,14 +34,21 @@ export async function uploadPhoto(userId: string, localUri: string): Promise<Upl
   const key = `${userId}/${uuid}.jpg`;
   const storagePath = `${BUCKET}/${key}`;
 
-  // expo-file-system's current File class implements Blob natively,
-  // including arrayBuffer() -- reads the local file straight into the
-  // ArrayBuffer shape supabase-js's upload methods want. No base64
-  // round-trip needed (the base64 + base64-arraybuffer-decode pattern
-  // in Supabase's own React Native guide predates this API and works
-  // around older FileSystem/Blob limitations that don't apply here).
-  const file = new File(localUri);
-  const body = await file.arrayBuffer();
+  // Read the local file via React Native's own fetch, straight into the
+  // ArrayBuffer shape supabase-js's upload methods want. Deliberately not
+  // expo-file-system's File.arrayBuffer(): that path runs an app-level
+  // permission check that rejected the resized photo in Expo Go on an
+  // Android emulator ("Missing 'READ' permission"), even though it's an
+  // ordinary app-cache file. fetch() reads file:// URIs through RN's
+  // native networking layer instead, with no such check. Not checking
+  // response.ok -- RN reports status 0 for file:// URIs on some
+  // platforms -- so the empty-body guard below is the real failure check
+  // (a silent 0-byte upload is the known failure mode of this pattern).
+  const response = await fetch(localUri);
+  const body = await response.arrayBuffer();
+  if (body.byteLength === 0) {
+    throw new Error('Could not read the photo file.');
+  }
 
   const { data: signed, error: signError } = await supabase.storage
     .from(BUCKET)

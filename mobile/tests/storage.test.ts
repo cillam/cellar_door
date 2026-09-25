@@ -4,12 +4,8 @@ jest.mock('expo-crypto', () => ({
   randomUUID: () => 'test-uuid',
 }));
 
-const mockArrayBuffer = jest.fn().mockResolvedValue(new ArrayBuffer(8));
-jest.mock('expo-file-system', () => ({
-  File: jest.fn().mockImplementation(() => ({
-    arrayBuffer: mockArrayBuffer,
-  })),
-}));
+const mockFetch = jest.fn();
+global.fetch = mockFetch as unknown as typeof fetch;
 
 const mockCreateSignedUploadUrl = jest.fn();
 const mockUploadToSignedUrl = jest.fn();
@@ -32,7 +28,7 @@ jest.mock('../lib/supabase', () => ({
 describe('uploadPhoto', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockArrayBuffer.mockResolvedValue(new ArrayBuffer(8));
+    mockFetch.mockResolvedValue({ arrayBuffer: async () => new ArrayBuffer(8) });
   });
 
   it('requests a signed URL for the bucket-relative key and uploads with it', async () => {
@@ -54,6 +50,15 @@ describe('uploadPhoto', () => {
     // Bucket-prefixed for the backend contract -- distinct from the
     // bucket-relative key sent to supabase-js above.
     expect(result).toEqual({ storagePath: 'photos/user-a-id/test-uuid.jpg' });
+  });
+
+  it('throws without requesting a signed URL when the file reads back empty', async () => {
+    mockFetch.mockResolvedValue({ arrayBuffer: async () => new ArrayBuffer(0) });
+
+    await expect(uploadPhoto('user-a-id', 'file:///photo.jpg')).rejects.toThrow(
+      'Could not read the photo file.',
+    );
+    expect(mockCreateSignedUploadUrl).not.toHaveBeenCalled();
   });
 
   it('throws when createSignedUploadUrl fails, without attempting the upload', async () => {

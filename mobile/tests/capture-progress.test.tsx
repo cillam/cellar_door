@@ -12,8 +12,10 @@ jest.mock('../lib/storage', () => ({
   uploadPhoto: jest.fn(),
 }));
 
+const mockBack = jest.fn();
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ photoUri: 'file:///resized-photo.jpg' }),
+  useRouter: () => ({ back: mockBack }),
 }));
 
 const mockUseAuth = useAuth as jest.Mock;
@@ -23,6 +25,7 @@ describe('CaptureProgressScreen', () => {
   beforeEach(() => {
     mockUseAuth.mockReset();
     mockUploadPhoto.mockReset();
+    mockBack.mockReset();
     mockUseAuth.mockReturnValue({ session: { user: { id: 'user-a-id' } } });
   });
 
@@ -46,21 +49,18 @@ describe('CaptureProgressScreen', () => {
     );
   });
 
-  it('shows an error and a retry button on failure, and retries on tap', async () => {
+  it('shows an error on failure, and Try Again goes back without re-uploading', async () => {
     mockUploadPhoto.mockRejectedValueOnce(new Error('Network request failed'));
 
     await render(<CaptureProgressScreen />);
-
     await waitFor(() => {
       expect(screen.getByText('Network request failed')).toBeTruthy();
     });
+
+    await fireEvent.press(screen.getByTestId('try-again-button'));
+
+    expect(mockBack).toHaveBeenCalledTimes(1);
     expect(mockUploadPhoto).toHaveBeenCalledTimes(1);
-
-    mockUploadPhoto.mockResolvedValueOnce({ storagePath: 'photos/user-a-id/retried-uuid.jpg' });
-    await fireEvent.press(screen.getByTestId('retry-upload-button'));
-
-    await waitFor(() => expect(screen.getByText('Photo uploaded.')).toBeTruthy());
-    expect(mockUploadPhoto).toHaveBeenCalledTimes(2);
   });
 
   it('shows an error without calling uploadPhoto when there is no session', async () => {

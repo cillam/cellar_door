@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -17,6 +17,7 @@ type UploadState =
  */
 export default function CaptureProgressScreen() {
   const { photoUri } = useLocalSearchParams<{ photoUri: string }>();
+  const router = useRouter();
   const { session } = useAuth();
   const [state, setState] = useState<UploadState>({ status: 'uploading' });
 
@@ -54,8 +55,10 @@ export default function CaptureProgressScreen() {
     return (
       <View style={styles.centered}>
         <Text style={styles.errorText}>{state.message}</Text>
-        <Pressable style={styles.button} onPress={runUpload} testID="retry-upload-button">
-          <Text style={styles.buttonText}>Retry</Text>
+        {/* Back to the add screen, not an in-place retry: the photo is
+            still there with Retake/Confirm. */}
+        <Pressable style={styles.button} onPress={() => router.back()} testID="try-again-button">
+          <Text style={styles.buttonText}>Try Again</Text>
         </Pressable>
       </View>
     );
