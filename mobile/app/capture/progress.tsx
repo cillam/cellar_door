@@ -19,16 +19,19 @@ export default function CaptureProgressScreen() {
   const { photoUri } = useLocalSearchParams<{ photoUri: string }>();
   const router = useRouter();
   const { session } = useAuth();
+  // Depend on the id, not the session object: Supabase hands back a new
+  // session object on every token refresh, which would re-run the upload.
+  const userId = session?.user.id;
   const [state, setState] = useState<UploadState>({ status: 'uploading' });
 
   const runUpload = useCallback(async () => {
-    if (!photoUri || !session) {
+    if (!photoUri || !userId) {
       setState({ status: 'error', message: 'Missing photo or session.' });
       return;
     }
     setState({ status: 'uploading' });
     try {
-      const { storagePath } = await uploadPhoto(session.user.id, photoUri);
+      const { storagePath } = await uploadPhoto(userId, photoUri);
       setState({ status: 'done', storagePath });
     } catch (err) {
       setState({
@@ -36,7 +39,7 @@ export default function CaptureProgressScreen() {
         message: err instanceof Error ? err.message : 'Upload failed. Try again.',
       });
     }
-  }, [photoUri, session]);
+  }, [photoUri, userId]);
 
   useEffect(() => {
     void runUpload();

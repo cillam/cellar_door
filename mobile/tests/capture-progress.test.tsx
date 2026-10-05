@@ -63,6 +63,21 @@ describe('CaptureProgressScreen', () => {
     expect(mockUploadPhoto).toHaveBeenCalledTimes(1);
   });
 
+  it('does not re-upload when a token refresh hands back a new session object for the same user', async () => {
+    mockUploadPhoto.mockResolvedValue({ storagePath: 'photos/user-a-id/some-uuid.jpg' });
+
+    await render(<CaptureProgressScreen />);
+    await waitFor(() => expect(screen.getByText('Photo uploaded.')).toBeTruthy());
+
+    // Supabase emits a fresh session object on every token refresh
+    // (including on app foreground) -- same user, new identity.
+    mockUseAuth.mockReturnValue({ session: { user: { id: 'user-a-id' } } });
+    await screen.rerender(<CaptureProgressScreen />);
+
+    expect(screen.getByText('Photo uploaded.')).toBeTruthy();
+    expect(mockUploadPhoto).toHaveBeenCalledTimes(1);
+  });
+
   it('shows an error without calling uploadPhoto when there is no session', async () => {
     mockUseAuth.mockReturnValue({ session: null });
 
