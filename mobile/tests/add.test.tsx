@@ -4,6 +4,7 @@ import { Linking } from 'react-native';
 import AddItemScreen from '../app/(tabs)/add';
 
 const mockTakePictureAsync = jest.fn();
+let mockCameraReports = true;
 const mockUseCameraPermissions = jest.fn();
 const mockRequestPermission = jest.fn();
 
@@ -14,10 +15,14 @@ const mockRequestPermission = jest.fn();
 jest.mock('expo-camera', () => {
   const React = require('react');
   return {
-    CameraView: React.forwardRef((_props: unknown, ref: React.Ref<unknown>) => {
+    CameraView: React.forwardRef(
+      (props: { onCameraReady?: () => void }, ref: React.Ref<unknown>) => {
       React.useImperativeHandle(ref, () => ({
         takePictureAsync: mockTakePictureAsync,
       }));
+      React.useEffect(() => {
+        if (mockCameraReports) props.onCameraReady?.();
+      }, []);
       return null;
     }),
     useCameraPermissions: () => mockUseCameraPermissions(),
@@ -46,6 +51,7 @@ jest.mock('expo-router', () => ({
 describe('AddItemScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCameraReports = true;
   });
 
   it('shows a request-access button when permission is undetermined and re-askable', async () => {
@@ -192,5 +198,21 @@ describe('AddItemScreen', () => {
     expect(screen.getByTestId('confirm-button')).toBeTruthy();
     expect(screen.getByTestId('retake-button')).toBeTruthy();
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('ignores capture taps until the camera reports ready', async () => {
+    // Regression: on the emulator the first tap did nothing and the
+    // second worked -- takePictureAsync was being called before the
+    // camera was ready. Taps before onCameraReady must be ignored.
+    mockCameraReports = false;
+    mockUseCameraPermissions.mockReturnValue([
+      { granted: true, canAskAgain: true, status: 'granted', expires: 'never' },
+      mockRequestPermission,
+    ]);
+
+    await render(<AddItemScreen />);
+    await fireEvent.press(screen.getByTestId('capture-button'));
+
+    expect(mockTakePictureAsync).not.toHaveBeenCalled();
   });
 });
