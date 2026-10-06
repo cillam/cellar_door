@@ -59,7 +59,8 @@ const STAGE_LABELS: Record<ResumeNode, Record<StageStatus, string>> = {
 const STATUS_GLYPHS: Record<StageStatus, string> = { pending: '○', active: '⋯', done: '✓' };
 
 function isResumeNode(event: PipelineEvent['event']): event is ResumeNode {
-  return event in STAGE_LABELS;
+  // hasOwnProperty, not `in`: `in` also matches inherited names.
+  return Object.prototype.hasOwnProperty.call(STAGE_LABELS, event);
 }
 
 function percent(confidence: number): string {
