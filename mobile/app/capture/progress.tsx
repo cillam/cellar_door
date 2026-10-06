@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { PipelineProgress } from '../../components/PipelineProgress';
 import { useAuth } from '../../lib/auth-context';
 import { uploadPhoto } from '../../lib/storage';
 
@@ -11,9 +12,9 @@ type UploadState =
   | { status: 'done'; storagePath: string };
 
 /**
- * Upload phase of the add-item flow (step 4), then a placeholder for the
- * pipeline progress phase (real SSE UI lands in step 5, using this
- * screen's resulting storagePath to call POST /items/from-photo).
+ * Upload phase of the add-item flow (step 4), then the pipeline progress
+ * phase (step 5), which takes this screen's resulting storagePath to
+ * POST /items/from-photo.
  */
 export default function CaptureProgressScreen() {
   const { photoUri } = useLocalSearchParams<{ photoUri: string }>();
@@ -67,16 +68,9 @@ export default function CaptureProgressScreen() {
     );
   }
 
-  // status === 'done' -- placeholder until step 5 wires the real SSE
-  // pipeline UI using this storagePath.
-  return (
-    <View style={styles.centered}>
-      <Text style={styles.statusText}>Photo uploaded.</Text>
-      <Text style={styles.pathText} testID="uploaded-storage-path">
-        {state.storagePath}
-      </Text>
-    </View>
-  );
+  // status === 'done' -- keyed by path so a different upload gets a
+  // fresh pipeline run rather than inheriting the previous one's state.
+  return <PipelineProgress key={state.storagePath} storagePath={state.storagePath} />;
 }
 
 const styles = StyleSheet.create({
@@ -90,11 +84,6 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 16,
     fontWeight: '600',
-  },
-  pathText: {
-    fontSize: 12,
-    color: '#555',
-    textAlign: 'center',
   },
   errorText: {
     fontSize: 16,
