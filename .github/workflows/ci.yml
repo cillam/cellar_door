@@ -38,5 +38,32 @@ jobs:
       - name: pytest
         run: uv run pytest
 
-  # Mobile job (tsc --noEmit, vitest, eslint) joins this workflow once
-  # mobile/ has code — see kickoff plan, mobile app work starts separately.
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # --legacy-peer-deps: the lockfile only installs cleanly this way.
+      # Under npm's strict peer resolution it is reported out of sync
+      # (react-dom and others pulled in as peers of Expo packages).
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+      - name: eslint
+        run: npm run lint
+
+      - name: jest
+        run: npm test

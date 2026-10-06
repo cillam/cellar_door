@@ -42,6 +42,10 @@ export default function CaptureProgressScreen() {
   }, [photoUri, userId]);
 
   useEffect(() => {
+    // Starting the upload is this effect's whole job. The only state
+    // runUpload sets before its first await is the initial 'uploading'
+    // value again, or the missing-param error.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void runUpload();
   }, [runUpload]);
 

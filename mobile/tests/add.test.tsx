@@ -22,6 +22,8 @@ jest.mock('expo-camera', () => {
       }));
       React.useEffect(() => {
         if (mockCameraReports) props.onCameraReady?.();
+        // Fires once on mount, like the real camera's ready event.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
       }, []);
       return null;
     }),
